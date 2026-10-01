@@ -24,3 +24,10 @@ describe('Postgres persistence compatibility', () => {
     expect(row).toEqual({ rank: 2, bounded: 0 });
   });
 });
+
+it('binds pre-encoded JSON as text before the JSON cast to avoid postgres.js double encoding', async () => {
+ const query=postgresQuery("SELECT json_extract(value, '$.rank') AS rank FROM json_each(?)", ['[{"rank":2}]']);
+ expect(query).toContain('jsonb_array_elements(($1)::text::jsonb)');
+ const row=await pg.query(query,['[{"rank":2}]']);
+ expect(Number((row.rows[0] as {rank:unknown}).rank)).toBe(2);
+});

@@ -52,6 +52,22 @@ describe('real Postgres v2 competition', () => {
     expect((await results.json()).own.correctCount).toBe(0);
   });
 });
+it('finalizes a deadline with unanswered fields', async () => {
+ now = Date.now();
+ const created = await call('createClassRoom', request('/api/class-rooms', {requestId:crypto.randomUUID(),settings:{...settings,gradingMode:'immediate'}}));
+ const {room}=await created.json(); const id=room.id; const token=createParticipantToken();
+ await call('joinRoom',request(`/api/rooms/${id}/join`,{requestId:crypto.randomUUID(),nickname:'Timeout'},token),id);
+ await call('startRoom',request(`/api/rooms/${id}/start`,{requestId:crypto.randomUUID(),expectedRevision:1}),id);
+ const manifest=await (await call('manifest',request(`/api/rooms/${id}/manifest`,undefined,token),id)).json();
+ const scheduled=await (await call('ready',request(`/api/rooms/${id}/ready`,{manifestId:manifest.manifestId,evaluatorVersion:manifest.evaluatorVersion,preparationGeneration:manifest.preparationGeneration},token),id)).json();
+ now=scheduled.startAtMs+settings.timeLimitMinutes*60000+11000;
+ const state=await call('state',request(`/api/rooms/${id}/state`,undefined,token),id);
+ expect(state.status,await state.clone().text()).toBe(200);
+ expect((await state.json()).room.state).toBe('FINISHED');
+ const results=await call('results',request(`/api/rooms/${id}/results`,undefined,token),id);
+ expect(results.status,await results.clone().text()).toBe(200);
+ expect((await results.json()).own.correctCount).toBe(0);
+});
 it('keeps the 42 participant limit on concurrent join requests in Postgres',async()=>{
  now=Date.now();
  const create=await call('createClassRoom',request('/api/class-rooms',{requestId:crypto.randomUUID(),settings:{...settings,gradingMode:'immediate'}}));

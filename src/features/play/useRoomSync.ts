@@ -1,6 +1,6 @@
 import { useRoomRealtime, type RoomTopics, type RoomEvent } from '../../web/realtime';
 import { pollInterval, retryPollDelay } from '../../web/realtime-policy';
-import { apiFetch } from '../../web/api';
+import { apiFetch, type ApiFetchOptions } from '../../web/api';
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,7 +8,7 @@ import { CompetitionClock, type ClockSample } from "./clock";
 
 export type RoomView = { id: string; kind: "class" | "mate"; state: "WAITING" | "PREPARING" | "COUNTDOWN" | "RUNNING" | "COLLECTING" | "FINISHED" | "CANCELLED" | "EXPIRED"; revision: number; playProtocolVersion?: number; gradingMode?: "immediate" | "deferred"; endReason?: "normal" | "interrupted"; settings: Record<string, unknown>; maxScore: number; startAtMs: number | null; deadlineAtMs: number | null; expiresAtMs: number };
 export type ParticipantState = { id: string; nickname: string; status: string; currentOrdinal: number; correctCount: number; resolvedQuestionCount: number; answeredCount?: number; submitted?: boolean; revision: number; elapsedCs: number | null; rawElapsedMs?: number; waitCreditMs?: number; timingSource: string | null };
-export type RoomStateResponse = { realtime?: RoomTopics; serverNow: number; room: RoomView; participant?: ParticipantState; participants?: ParticipantState[]; question?: any; v2?: { state: string; manifestId: string; preparationGeneration: number; preparationTimedOut: boolean; readyCount: number | null; participantCount: number | null; notReadyNicknames: string[]; cutoffAtMs: number | null; collectionUntilMs: number | null } };
+export type RoomStateResponse = { realtime?: RoomTopics; serverNow: number; serverTiming?: {receivedAtMs:number;sentAtMs:number}; room: RoomView; participant?: ParticipantState; participants?: ParticipantState[]; question?: any; v2?: { state: string; manifestId: string; preparationGeneration: number; preparationTimedOut: boolean; readyCount: number | null; participantCount: number | null; notReadyNicknames: string[]; cutoffAtMs: number | null; collectionUntilMs: number | null } };
 export type RemovedParticipantStatus = { nickname: string; roomState: string; canRejoin: boolean };
 
 type SnapshotRevision = { room: { revision: number }; participant?: { revision: number } };
@@ -51,7 +51,7 @@ export function retryAfterMs(value: string | null, nowMs = Date.now()): number |
   return Number.isNaN(date) ? null : Math.max(0, date - nowMs);
 }
 
-export async function fetchJsonWithTimeout(path: string, init: RequestInit, timeoutMs: number): Promise<any> {
+export async function fetchJsonWithTimeout(path: string, init: ApiFetchOptions, timeoutMs: number): Promise<any> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
@@ -88,9 +88,9 @@ export function useRoomSync(roomId: string, token?: string | null) {
     if (stopped.current) throw new Error("この参加資格は使用できません");
     const requestIdentity = `${roomId}:${token ?? ""}`;
     const sequence = ++requestSequence.current;
-    const sentAt = performance.now();
+    let sentAt = performance.now();
     let next: RoomStateResponse;
-    try { next = await fetchJsonWithTimeout(`/api/rooms/${encodeURIComponent(roomId)}/state`, { cache: "no-store", headers: token ? { authorization: `Bearer ${token}` } : undefined }, 10_000) as RoomStateResponse; }
+    try { next = await fetchJsonWithTimeout(`/api/rooms/${encodeURIComponent(roomId)}/state`, { cache: "no-store", onDispatch:()=>{sentAt=performance.now();}, headers: token ? { authorization: `Bearer ${token}` } : undefined }, 10_000) as RoomStateResponse; }
     catch (reason) {
       if (requestIdentity !== identity.current) throw reason;
       const failure = reason as { code?: string; details?: Partial<RemovedParticipantStatus>; message?: string };
@@ -108,12 +108,12 @@ export function useRoomSync(roomId: string, token?: string | null) {
     const actualReceivedAt = performance.now();
     if (selected === next && next.room.startAtMs != null) {
       if (!clockRef.current || clockRef.current.startAtMs !== next.room.startAtMs) clockRef.current = new CompetitionClock(next.room.startAtMs);
-      clockRef.current.synchronize({ sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow });
+      clockRef.current.synchronize({ sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow, serverTiming:next.serverTiming });
       if (next.participant?.rawElapsedMs != null) clockRef.current.confirm(next.participant.rawElapsedMs);
     }
     if (selected === next) { appliedSequence.current = sequence; latestData.current = next; setData(next); }
     setConnected(true); setError(null);
-    return { next, sample: { sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow } satisfies ClockSample };
+    return { next, sample: { sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow, serverTiming:next.serverTiming } satisfies ClockSample };
   }, [roomId, token]);
 
   const eventRefresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

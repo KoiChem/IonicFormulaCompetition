@@ -80,7 +80,10 @@ export async function applyV2Operations(db: PersistenceDatabase, input: ApplyV2O
   const allOps = [...previousOps, ...input.operations];
   const interruption = context.end_reason === "interrupted";
   for (const operation of input.operations) {
-    if (context.start_at_ms + operation.elapsedMs > input.nowMs + 250) throw new TypeError("operation time is in the future");
+    if (context.start_at_ms + operation.elapsedMs > input.nowMs + 250) {
+      console.warn(JSON.stringify({event:'operation_clock_rejected',type:operation.type,aheadByMs:context.start_at_ms + operation.elapsedMs-input.nowMs}));
+      throw new TypeError("operation time is in the future");
+    }
     if (operation.type === "finish" && operation.reason === "interrupted" && !interruption) throw new TypeError("unexpected interruption finish");
     if (context.grading_mode === "immediate" && operation.type === "draft") throw new TypeError("draft is not valid in immediate mode");
     if (context.grading_mode === "deferred" && ["answer", "pass"].includes(operation.type)) throw new TypeError("answer or pass is not valid in deferred mode");

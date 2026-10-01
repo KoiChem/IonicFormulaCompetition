@@ -6,7 +6,7 @@ export function transactionIsolation(scope:string){
 }
 export function postgresTransactions(connectionString:string):TransactionRunner {
   // Transaction-mode Supavisor does not support prepared statements.
-  const sql=postgres(connectionString,{prepare:false,max:1,ssl:'require',idle_timeout:20,connect_timeout:10});
+  const sql=postgres(connectionString,{prepare:false,max:1,ssl:'require',idle_timeout:1,connect_timeout:10});
   return async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>):Promise<T>=>{
     for(let attempt=0;;attempt++){
       // SERIALIZABLE snapshots taken by the lock SELECT would predate waiting.

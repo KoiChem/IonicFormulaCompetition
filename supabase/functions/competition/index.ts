@@ -1,11 +1,23 @@
+// src/platform/database-url.ts
+function transactionPoolerUrl(directUrl, projectRef, poolerHost) {
+  const url2 = new URL(directUrl);
+  if (url2.hostname !== `db.${projectRef}.supabase.co` || url2.username !== "postgres") {
+    throw new Error("Unexpected built-in database topology");
+  }
+  url2.hostname = poolerHost;
+  url2.port = "6543";
+  url2.username = `postgres.${projectRef}`;
+  return url2.toString();
+}
+
 // src/platform/postgres-runtime.ts
 import postgres from "npm:postgres@3.4.9";
 
 // src/platform/postgres-database.ts
 function postgresQuery(input, values = []) {
-  let sql = input.replaceAll("`", '"').replace(/CAST\(unixepoch\('subsec'\) \* 1000 AS INTEGER\)/g, "floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint").replace(/CAST\(([^()]+) AS INTEGER\)/gi, "CAST($1 AS bigint)").replace(/json_object\(/g, "json_build_object(").replace(/json_each\(([^()]+)\)/g, "jsonb_array_elements(($1)::jsonb)").replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression, path) => {
+  let sql = input.replaceAll("`", '"').replace(/CAST\(unixepoch\('subsec'\) \* 1000 AS INTEGER\)/g, "floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint").replace(/CAST\(([^()]+) AS INTEGER\)/gi, "CAST($1 AS bigint)").replace(/json_object\(/g, "json_build_object(").replace(/json_each\(([^()]+)\)/g, "jsonb_array_elements(($1)::text::jsonb)").replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression, path) => {
     const keys = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), (m) => m[1] ?? m[2]);
-    const extract = `((${expression})::jsonb #>> '{${keys.join(",")}}')`;
+    const extract = `((${expression})::text::jsonb #>> '{${keys.join(",")}}')`;
     return ["correctCount", "elapsedCs", "rank"].includes(keys.at(-1)) ? `${extract}::bigint` : extract;
   }).replace(/MAX\((expires_at_ms|0),/g, "GREATEST($1,");
   const ignore = /\bINSERT OR IGNORE\b/i.test(sql);
@@ -79,7 +91,7 @@ function transactionIsolation(scope) {
   return scope.startsWith("room:") || scope.startsWith("broadcast:") ? "read committed" : "serializable";
 }
 function postgresTransactions(connectionString) {
-  const sql = postgres(connectionString, { prepare: false, max: 1, ssl: "require", idle_timeout: 20, connect_timeout: 10 });
+  const sql = postgres(connectionString, { prepare: false, max: 1, ssl: "require", idle_timeout: 1, connect_timeout: 10 });
   return async (scope, run) => {
     for (let attempt = 0; ; attempt++) {
       try {
@@ -5101,7 +5113,10 @@ async function applyV2Operations(db, input) {
   const allOps = [...previousOps, ...input.operations];
   const interruption = context.end_reason === "interrupted";
   for (const operation of input.operations) {
-    if (context.start_at_ms + operation.elapsedMs > input.nowMs + 250) throw new TypeError("operation time is in the future");
+    if (context.start_at_ms + operation.elapsedMs > input.nowMs + 250) {
+      console.warn(JSON.stringify({ event: "operation_clock_rejected", type: operation.type, aheadByMs: context.start_at_ms + operation.elapsedMs - input.nowMs }));
+      throw new TypeError("operation time is in the future");
+    }
     if (operation.type === "finish" && operation.reason === "interrupted" && !interruption) throw new TypeError("unexpected interruption finish");
     if (context.grading_mode === "immediate" && operation.type === "draft") throw new TypeError("draft is not valid in immediate mode");
     if (context.grading_mode === "deferred" && ["answer", "pass"].includes(operation.type)) throw new TypeError("answer or pass is not valid in deferred mode");
@@ -5542,6 +5557,15 @@ async function safe(handler) {
     return await handler();
   } catch (error) {
     const mapped = publicError(error);
+    if (mapped.status >= 500 || error instanceof TypeError || error instanceof RangeError) {
+      const candidate = error;
+      console.error(JSON.stringify({
+        event: "handler_failed",
+        category: typeof candidate?.name === "string" ? candidate.name : "Unknown",
+        code: typeof candidate?.code === "string" && /^[A-Z0-9]{5}$/.test(candidate.code) ? candidate.code : void 0,
+        frames: typeof candidate?.stack === "string" ? candidate.stack.split("\n").filter((line) => /^\s+at\s/.test(line)).slice(0, 3).map((line) => line.slice(0, 240)) : void 0
+      }));
+    }
     return jsonResponse(
       { error: { code: mapped.code, message: mapped.message } },
       mapped.status,
@@ -6827,6 +6851,7 @@ async function topicsFor(db, user, publicId, now) {
 }
 function createSupabaseGateway(options) {
   return async (incoming) => {
+    const receivedAtMs = (options.now ?? Date.now)();
     const origin = incoming.headers.get("origin");
     if (!origin || !options.allowedOrigins.includes(origin)) return failure(403, "origin_forbidden", "\u8A31\u53EF\u3055\u308C\u305F\u30A2\u30D7\u30EA\u304B\u3089\u5229\u7528\u3057\u3066\u304F\u3060\u3055\u3044");
     if (incoming.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), origin);
@@ -6884,9 +6909,10 @@ function createSupabaseGateway(options) {
       });
       if (publicId) void options.flush(publicId).catch(() => {
       });
-      return withCors(response, origin);
+      const timedResponse = route?.name === "state" && response.ok ? jsonResponse({ ...await response.clone().json(), serverTiming: { receivedAtMs, sentAtMs: (options.now ?? Date.now)() } }) : response;
+      return withCors(timedResponse, origin);
     } catch (error) {
-      console.error(JSON.stringify({ event: "gateway_failed", category: error instanceof Error ? error.name : "Unknown" }));
+      console.error(JSON.stringify({ event: "gateway_failed", category: error instanceof Error ? error.name : "Unknown", code: typeof error?.code === "string" && /^[A-Z0-9]{5}$/.test(error.code) ? error.code : void 0 }));
       return withCors(failure(503, "service_unavailable", "\u30B5\u30FC\u30D3\u30B9\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044"), origin);
     }
   };
@@ -6901,7 +6927,12 @@ var required = (name) => {
 var url = required("SUPABASE_URL");
 var key = required("SUPABASE_ANON_KEY");
 var serviceKey = required("SUPABASE_SERVICE_ROLE_KEY");
-var transact = postgresTransactions(Deno.env.get("COMPETITION_DATABASE_URL") ?? required("SUPABASE_DB_URL"));
+var databaseUrl = Deno.env.get("COMPETITION_DATABASE_URL") ?? transactionPoolerUrl(
+  required("SUPABASE_DB_URL"),
+  "slktkbpvvsfpflnmpuvr",
+  "aws-0-ap-northeast-2.pooler.supabase.com"
+);
+var transact = postgresTransactions(databaseUrl);
 async function flush(publicId) {
   await flushRoomEvents(transact, publicId, async (topic, event, payload) => {
     const result = await fetch(`${url}/realtime/v1/api/broadcast`, {

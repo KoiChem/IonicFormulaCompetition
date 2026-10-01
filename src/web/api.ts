@@ -6,13 +6,16 @@ export function apiHeaders(sessionToken: string, supplied?: HeadersInit): Header
   headers.set('authorization', `Bearer ${sessionToken}`);
   return headers;
 }
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export type ApiFetchOptions = RequestInit & { onDispatch?: () => void };
+export async function apiFetch(path: string, init: ApiFetchOptions = {}): Promise<Response> {
   if (!path.startsWith('/api/')) throw new Error('Invalid API path');
   const session = await ensureSession();
   const headers = apiHeaders(session.access_token, init.headers);
   headers.set('apikey', import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
   if(import.meta.env.VITE_SUPABASE_FUNCTION_REGION)headers.set('x-region',import.meta.env.VITE_SUPABASE_FUNCTION_REGION);
-  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/competition${path}`, { ...init, headers });
+  const {onDispatch, ...requestInit}=init;
+  onDispatch?.();
+  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/competition${path}`, { ...requestInit, headers });
   if (response.status === 401) await getSupabaseClient().auth.refreshSession();
   return response;
 }

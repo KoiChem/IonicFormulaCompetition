@@ -9,10 +9,11 @@ export function postgresQuery(input: string, values: readonly SqlValue[] = []): 
     .replace(/CAST\(unixepoch\('subsec'\) \* 1000 AS INTEGER\)/g, 'floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint')
     .replace(/CAST\(([^()]+) AS INTEGER\)/gi, 'CAST($1 AS bigint)')
     .replace(/json_object\(/g, 'json_build_object(')
-    .replace(/json_each\(([^()]+)\)/g, 'jsonb_array_elements(($1)::jsonb)')
+    // Force text parameter OIDs: postgres.js otherwise JSON-encodes our JSON strings again.
+    .replace(/json_each\(([^()]+)\)/g, 'jsonb_array_elements(($1)::text::jsonb)')
     .replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression: string, path: string) => {
       const keys = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), m => m[1] ?? m[2]);
-      const extract = `((${expression})::jsonb #>> '{${keys.join(',')}}')`;
+      const extract = `((${expression})::text::jsonb #>> '{${keys.join(',')}}')`;
       return ['correctCount', 'elapsedCs', 'rank'].includes(keys.at(-1)!) ? `${extract}::bigint` : extract;
     })
     .replace(/MAX\((expires_at_ms|0),/g, 'GREATEST($1,');

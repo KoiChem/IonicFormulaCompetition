@@ -89,6 +89,7 @@ async function topicsFor(db:PersistenceDatabase,user:VerifiedUser,publicId:strin
 
 export function createSupabaseGateway(options:GatewayOptions) {
   return async (incoming:Request):Promise<Response> => {
+    const receivedAtMs=(options.now??Date.now)();
     const origin=incoming.headers.get('origin');
     if(!origin||!options.allowedOrigins.includes(origin))return failure(403,'origin_forbidden','許可されたアプリから利用してください');
     if(incoming.method==='OPTIONS')return withCors(new Response(null,{status:204}),origin);
@@ -139,9 +140,12 @@ export function createSupabaseGateway(options:GatewayOptions) {
         return result;
       });
       if(publicId)void options.flush(publicId).catch(()=>{});
-      return withCors(response,origin);
+      const timedResponse=route?.name==='state'&&response.ok
+        ? jsonResponse({...await response.clone().json(),serverTiming:{receivedAtMs,sentAtMs:(options.now??Date.now)()}})
+        : response;
+      return withCors(timedResponse,origin);
     } catch(error) {
-      console.error(JSON.stringify({event:'gateway_failed',category:error instanceof Error?error.name:'Unknown'}));
+      console.error(JSON.stringify({event:'gateway_failed',category:error instanceof Error?error.name:'Unknown',code:typeof (error as {code?:unknown})?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined}));
       return withCors(failure(503,'service_unavailable','サービスを利用できません。再試行してください'),origin);
     }
   };

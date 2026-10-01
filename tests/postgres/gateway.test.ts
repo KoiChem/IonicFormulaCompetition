@@ -37,6 +37,10 @@ it('binds participants by token and rotates topics when their identity is recove
  const token='A'.repeat(43);currentUser={id:'22222222-2222-4222-8222-222222222222',is_anonymous:true};
  const join=await gateway(req(`/api/rooms/${room.id}/join`,{requestId:crypto.randomUUID(),nickname:'生徒'},token));
  expect(join.status,await join.clone().text()).toBe(201);
+ const snapshot=await gateway(req(`/api/rooms/${room.id}/state`,undefined,token));
+ const snapshotBody=await snapshot.json();
+ expect(snapshotBody.serverTiming.receivedAtMs).toBeLessThanOrEqual(snapshotBody.serverTiming.sentAtMs);
+ expect(Number.isSafeInteger(snapshotBody.serverTiming.receivedAtMs)).toBe(true);
  const topics=await gateway(req(`/api/rooms/${room.id}/realtime`,undefined,token));
  expect(topics.status,await topics.clone().text()).toBe(200);
  const first=await topics.json();expect(first.host).toBeNull();

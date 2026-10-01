@@ -26,7 +26,7 @@ pnpm edge:bundle
 supabase functions deploy competition --project-ref slktkbpvvsfpflnmpuvr --use-api
 ```
 
-バックエンド秘密設定: `MASTER_TEACHER_EMAIL`, `ALLOWED_ORIGINS`。DB接続はSupabase既定の `SUPABASE_DB_URL` を使用し、必要時のみ `COMPETITION_DATABASE_URL` で上書きします。公開設定には秘密キーを入れません。
+バックエンド秘密設定: `MASTER_TEACHER_EMAIL`, `ALLOWED_ORIGINS`。DB接続は既定の `SUPABASE_DB_URL` の資格情報をサーバー内で再利用し、このプロジェクトのTransaction pooler（`aws-0-ap-northeast-2.pooler.supabase.com:6543`）へ接続します。直接接続はEdgeの短命インスタンスごとに接続を占有して53300エラーになったため切り替えました。別プロジェクトへ移す場合は接続先を再確認してください。必要時のみ `COMPETITION_DATABASE_URL` で上書きします。公開設定には秘密キーを入れません。
 
 `verify_jwt=false` はEdge入口の旧JWT検査を使わない設定です。APIはすべて、このプロジェクトのAuth `/user` でJWTを検証してから処理します。データ表はanon/authenticatedから直接読めず、Realtimeもprivate購読の権限をDBで判定します。
 
@@ -46,3 +46,5 @@ supabase functions deploy competition --project-ref slktkbpvvsfpflnmpuvr --use-a
 匿名Authユーザーは自動削除されません。`scripts/anonymous-maintenance.mjs` は候補の点検用です。教員identity・存続中の参加資格・最近の利用があるユーザーは削除候補にしません。削除する場合は対象と件数を確認し、管理者がSupabase Auth管理画面で実施してください。
 
 ログにトークン、全解答、秘密キーを出しません。エラー調査にはrequest IDと操作種別を使います。バックアップやデータ移行は別作業です。
+
+時刻同期にはAPIの受信・送信時刻を使い、Auth処理・DB待機などのサーバー処理時間を通信遅延から除きます。ブラウザー側はAuthセッション取得後の実際のfetch開始時刻を測ります。ネットワーク経路の非対称性まで補正するものではありません。

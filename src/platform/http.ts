@@ -188,6 +188,14 @@ async function safe(handler: () => Promise<Response>): Promise<Response> {
     return await handler();
   } catch (error) {
     const mapped = publicError(error);
+    if (mapped.status >= 500 || error instanceof TypeError || error instanceof RangeError) {
+      // No error messages or bound data: only failure type and source frames.
+      const candidate = error as { name?: unknown; code?: unknown; stack?: unknown };
+      console.error(JSON.stringify({ event: 'handler_failed',
+        category: typeof candidate?.name === 'string' ? candidate.name : 'Unknown',
+        code: typeof candidate?.code === 'string' && /^[A-Z0-9]{5}$/.test(candidate.code) ? candidate.code : undefined,
+        frames: typeof candidate?.stack === 'string' ? candidate.stack.split('\n').filter(line => /^\s+at\s/.test(line)).slice(0, 3).map(line => line.slice(0, 240)) : undefined }));
+    }
     return jsonResponse(
       { error: { code: mapped.code, message: mapped.message } },
       mapped.status,

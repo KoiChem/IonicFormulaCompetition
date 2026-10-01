@@ -34,3 +34,10 @@ describe("competition clock", () => {
     expect(clock.captureElapsedMs(1_000)).toBeNull();
   });
 });
+
+it('removes uneven Edge processing delay from the clock offset',()=>{
+ const sample=chooseBestClockSample([{sentAt:100,receivedAt:2300,serverNow:12000,
+  serverTiming:{receivedAtMs:10100,sentAtMs:12100}}]);
+ expect(sample.serverAtPerformanceOriginMs).toBe(9900);
+ expect(sample.roundTripMs).toBe(200);
+});

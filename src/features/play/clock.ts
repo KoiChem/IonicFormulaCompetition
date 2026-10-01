@@ -1,8 +1,13 @@
-export type ClockSample = { readonly sentAt: number; readonly receivedAt: number; readonly serverNow: number };
+export type ClockSample = { readonly sentAt: number; readonly receivedAt: number; readonly serverNow: number; readonly serverTiming?: {readonly receivedAtMs:number; readonly sentAtMs:number} };
 export type ResolvedClockSample = ClockSample & { readonly roundTripMs: number; readonly serverAtPerformanceOriginMs: number };
 function resolveSample(sample: ClockSample): ResolvedClockSample {
-  const roundTripMs = Math.max(0, sample.receivedAt - sample.sentAt);
-  return { ...sample, roundTripMs, serverAtPerformanceOriginMs: sample.serverNow - (sample.sentAt + roundTripMs / 2) };
+  const totalMs = Math.max(0, sample.receivedAt - sample.sentAt);
+  const timing = sample.serverTiming;
+  const validTiming = timing && Number.isSafeInteger(timing.receivedAtMs) && Number.isSafeInteger(timing.sentAtMs)
+    && timing.sentAtMs >= timing.receivedAtMs && timing.sentAtMs - timing.receivedAtMs <= totalMs + 10;
+  const serverReference = validTiming ? (timing.receivedAtMs + timing.sentAtMs) / 2 : sample.serverNow;
+  const roundTripMs = validTiming ? Math.max(0, totalMs - (timing.sentAtMs - timing.receivedAtMs)) : totalMs;
+  return { ...sample, roundTripMs, serverAtPerformanceOriginMs: serverReference - (sample.sentAt + totalMs / 2) };
 }
 export function chooseBestClockSample(samples: readonly ClockSample[]): ResolvedClockSample {
   if (!samples.length) throw new TypeError("時刻同期にはサンプルが必要です");
