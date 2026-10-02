@@ -42,7 +42,7 @@ export async function updateRoomSettingsCommand(
   };
   const marker = commandMarker(actorId, input.requestId);
   const statements = [database.prepare(`
-    UPDATE rooms SET settings_json = ?, max_score = ?, revision = revision + 1, last_command_id = ?
+    UPDATE rooms SET settings_json = ?, dataset_version = ?, max_score = ?, revision = revision + 1, last_command_id = ?
     WHERE id = ? AND state = 'WAITING' AND revision = ?
       AND NOT EXISTS (SELECT 1 FROM v2_room_manifests m WHERE m.room_id = rooms.id AND m.state != 'WAITING')
       AND expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
@@ -51,7 +51,7 @@ export async function updateRoomSettingsCommand(
         WHERE room_id = rooms.id AND actor_id = ? AND request_id = ?
       )
   `).bind(
-    json(input.settings), input.maxScore, marker, input.roomId, input.expectedRevision,
+    json(input.settings), input.settings.chemistryContentVersion ?? "4", input.maxScore, marker, input.roomId, input.expectedRevision,
     actorId, input.requestId,
   )];
   statements.push(database.prepare(`

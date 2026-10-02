@@ -85,6 +85,13 @@
       "when": 1790640000000,
       "tag": "0011_v2_submitted_results",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1790898133709,
+      "tag": "0012_wandering_true_believers",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ export function postgresQuery(input: string, values: readonly SqlValue[] = []): 
     .replace(/CAST\(([^()]+) AS INTEGER\)/gi, 'CAST($1 AS bigint)')
     .replace(/json_object\(/g, 'json_build_object(')
     // Force text parameter OIDs: postgres.js otherwise JSON-encodes our JSON strings again.
+    .replace(/(?<!CROSS )\bJOIN\s+json_each\(/g, 'CROSS JOIN LATERAL json_each(')
     .replace(/json_each\(([^()]+)\)/g, 'jsonb_array_elements(($1)::text::jsonb)')
     .replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression: string, path: string) => {
       const keys = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), m => m[1] ?? m[2]);

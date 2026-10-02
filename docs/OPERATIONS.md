@@ -9,7 +9,7 @@
 ## Googleログインの初期設定
 
 1. Google CloudでWebアプリ用OAuthクライアントを作成します。
-2. 承認済みJavaScript生成元: `https://slktkbpvvsfpflnmpuvr.supabase.co`。
+2. 承認済みJavaScript生成元: `https://koichem.github.io`。
 3. 承認済みリダイレクトURI: `https://slktkbpvvsfpflnmpuvr.supabase.co/auth/v1/callback`。
 4. Supabase Authentication > Sign In / Providers > GoogleでClient IDとClient Secretを登録して有効化します。Secretはソースやチャットへ貼り付けません。
 5. Google同意画面がTestingの場合、利用する教員のメールをテストユーザーに追加します。学校管理のGoogleアカウントは管理者ポリシーも確認します。
@@ -48,3 +48,9 @@ supabase functions deploy competition --project-ref slktkbpvvsfpflnmpuvr --use-a
 ログにトークン、全解答、秘密キーを出しません。エラー調査にはrequest IDと操作種別を使います。バックアップやデータ移行は別作業です。
 
 時刻同期にはAPIの受信・送信時刻を使い、Auth処理・DB待機などのサーバー処理時間を通信遅延から除きます。ブラウザー側はAuthセッション取得後の実際のfetch開始時刻を測ります。ネットワーク経路の非対称性まで補正するものではありません。
+
+## 出題設定と錯イオン
+
+管理者教員の「管理設定」→「難易度を調整」で割合・配分・各教材の対象難易度を保存します。Google認証済みマスターだけが操作できます。保存は新規ルームへ適用され、既存ルームの作成時設定は固定されます。旧ルームの設定・結果は保持します。元Sites版revision5の設定を初期移植し、その後は各版で独立管理します。
+
+新しいPostgreSQLテーブルはRLS有効・ブラウザ直接権限なしです。設定を含むJSONは管理者APIから取得し、公開クライアントへ教材マスターを同梱しません。

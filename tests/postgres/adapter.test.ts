@@ -31,3 +31,7 @@ it('binds pre-encoded JSON as text before the JSON cast to avoid postgres.js dou
  const row=await pg.query(query,['[{"rank":2}]']);
  expect(Number((row.rows[0] as {rank:unknown}).rank)).toBe(2);
 });
+it('uses a lateral cross join for SQLite table-valued JSON array joins',async()=>{
+ const query=postgresQuery("SELECT json_extract(field.value, '$.id') AS id FROM (SELECT '[{\"id\":\"formula\"}]' AS fields) q JOIN json_each(q.fields) AS field WHERE true");
+ expect(query).toContain('CROSS JOIN LATERAL');expect((await pg.query(query)).rows).toEqual([{id:'formula'}]);
+});

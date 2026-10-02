@@ -20,7 +20,7 @@ async function call(name: keyof ReturnType<typeof createApiHandlers>, req: Reque
     return result;
   });
 }
-beforeAll(async () => { pg = new PGlite(); await pg.exec(readFileSync('supabase/migrations/202610010001_core.sql','utf8')); });
+beforeAll(async () => { pg = new PGlite(); await pg.exec(readFileSync('supabase/migrations/202610010001_core.sql','utf8')); await pg.exec('CREATE ROLE anon; CREATE ROLE authenticated'); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8')); });
 afterAll(async () => { await pg.close(); });
 describe('real Postgres v2 competition', () => {
   it.each(['immediate','deferred'])('runs %s prepare, ready, immutable operation retry, and final result', async gradingMode => {
@@ -76,3 +76,19 @@ it('keeps the 42 participant limit on concurrent join requests in Postgres',asyn
  expect(responses.filter(r=>r.status===201)).toHaveLength(42);
  expect(responses.filter(r=>r.status===409)).toHaveLength(1);
 },15000);
+
+it('pins the actual PostgreSQL room profile across later master edits',async()=>{
+ const saved=await call('teacherQuestionProfile',request('/api/teacher/question-profile'));
+ // This test helper only supplies an ordinary teacher: master-only policy must hold.
+ expect(saved.status).toBe(403);
+ const profileModule=await import('../../src/games/ionic-formula/shared/question-profile');
+ const first=structuredClone(profileModule.DEFAULT_QUESTION_PROFILE);first.rules.ion.normal.complexPercent=30;
+ await pg.query('INSERT INTO question_profiles(id,profile_json,revision,updated_at_ms) VALUES(1,$1,1,$2) ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json,revision=1',[JSON.stringify(first),Date.now()]);
+ const created=await call('createClassRoom',request('/api/class-rooms',{requestId:crypto.randomUUID(),settings:{...settings,complexEnabled:true}}));expect(created.status).toBe(201);const {room}=await created.json();
+ const next=structuredClone(first);next.rules.ion.normal.complexPercent=10;await pg.query('UPDATE question_profiles SET profile_json=$1,revision=2 WHERE id=1',[JSON.stringify(next)]);
+ const token=createParticipantToken();expect((await call('joinRoom',request(`/api/rooms/${room.id}/join`,{requestId:crypto.randomUUID(),nickname:'固定確認'},token),room.id)).status).toBe(201);
+ const started=await call('startRoom',request(`/api/rooms/${room.id}/start`,{requestId:crypto.randomUUID(),expectedRevision:1}),room.id);expect(started.status,await started.clone().text()).toBe(200);
+ const rows=await pg.query('SELECT answer_snapshot_json FROM room_questions WHERE room_id=(SELECT id FROM rooms WHERE public_id=$1)',[room.id]);
+ expect(rows.rows.filter((q:any)=>JSON.parse(q.answer_snapshot_json).itemId.startsWith('complex_'))).toHaveLength(2);
+ const snapshot=await pg.query('SELECT profile_revision FROM room_question_profiles WHERE room_id=(SELECT id FROM rooms WHERE public_id=$1)',[room.id]);expect(Number((snapshot.rows[0] as any).profile_revision)).toBe(1);
+});

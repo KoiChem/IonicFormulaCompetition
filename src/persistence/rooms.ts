@@ -1,3 +1,4 @@
+import type { SavedQuestionProfile } from "./question-profiles";
 import { toPublicQuestion } from "../games/ionic-formula/server/question-generator";
 import type { InternalQuestion, IonicFormulaGameSettings } from "../games/ionic-formula/shared/types";
 import { PUBLIC_CONFIG } from "../config/public";
@@ -36,6 +37,7 @@ export type CreateRoomInput = {
   readonly nowMs: number;
   readonly expiresAtMs: number;
   readonly host?: HostParticipant;
+  readonly questionProfile?: SavedQuestionProfile;
 };
 
 export type CreatedRoom = {
@@ -153,6 +155,12 @@ export async function createRoom(
       MATE_CREATION_WINDOW_MS, MATE_CREATION_LIMIT,
     ),
   ];
+  if (input.questionProfile) {
+    statements.push(database.prepare(`INSERT INTO room_question_profiles (room_id, profile_json, profile_revision)
+      SELECT id, ?, ? FROM rooms WHERE id = ? AND last_command_id = ?`).bind(
+        json(input.questionProfile.profile), input.questionProfile.revision, input.roomId, marker,
+      ));
+  }
   if (input.host) {
     statements.push(database.prepare(`
       INSERT INTO participants (

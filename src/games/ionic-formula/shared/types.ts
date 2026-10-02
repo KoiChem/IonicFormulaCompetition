@@ -7,6 +7,8 @@ export type CompoundAnswerMode = "formula" | "name" | "random" | "both";
 export type GradingMode = "immediate" | "deferred";
 
 export type IonicFormulaGameSettings = CompetitionSettings & {
+  readonly complexEnabled?: boolean;
+  readonly chemistryContentVersion?: string;
   readonly gradingMode?: GradingMode;
   readonly mode: GameMode;
   readonly difficulty: Difficulty;

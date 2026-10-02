@@ -37,6 +37,7 @@ export type PersistenceErrorCode =
   | "rate_limited"
   | "request_id_reused"
   | "stale_participant_revision"
+  | "stale_question_profile"
   | "stale_room_revision";
 
 export class PersistenceConflictError extends Error {

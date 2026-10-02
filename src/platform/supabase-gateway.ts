@@ -21,6 +21,7 @@ const topRoutes: Record<string, { method: string[]; name: HandlerName }> = {
   '/api/mate-rooms': {method:['POST'],name:'createMateRoom'},
   '/api/teacher/session': {method:['GET'],name:'teacherSession'},
   '/api/teacher/allowlist': {method:['GET','POST'],name:'teacherAllowlist'},
+  '/api/teacher/question-profile': {method:['GET','PATCH'],name:'teacherQuestionProfile'},
   '/api/teacher/site-settings': {method:['GET','PATCH'],name:'teacherSiteSettings'},
 };
 const roomRoutes: Record<string, { method: string[]; name: HandlerName }> = {

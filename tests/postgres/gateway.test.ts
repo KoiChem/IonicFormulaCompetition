@@ -18,7 +18,7 @@ beforeAll(async()=>{
  CREATE SCHEMA realtime; CREATE TABLE realtime.messages(extension text); ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
  CREATE FUNCTION realtime.topic() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('request.topic',true) $$;`);
  await pg.exec(readFileSync('supabase/migrations/202610010002_auth_realtime.sql','utf8'));
- await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8'));
+ await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8'));
 });
 afterAll(async()=>pg.close());
 it('rejects untrusted origins and anonymous teacher impersonation',async()=>{

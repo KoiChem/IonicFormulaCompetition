@@ -34,7 +34,7 @@ describe("Task 6 review fixes", () => {
       expect(tokens.every((token) => available.has(token)), item.formula).toBe(true);
     }
     expect(CHARGE_OPTIONS.map(({ magnitude, sign }) => `${magnitude}${sign}`)).toEqual([
-      "1+", "2+", "3+", "1-", "2-", "3-",
+      "1+", "2+", "3+", "1-", "2-", "3-", "4-",
     ]);
     expect(CHARGE_OPTIONS.every((charge) => charge.source === "chargeButton")).toBe(true);
   });
@@ -68,7 +68,7 @@ describe("Task 6 review fixes", () => {
   it("uses random defaults and exposes compound prompt toggles and shared settings summaries", () => {
     expect(DEFAULT_SETTINGS.ionAnswer).toBe("random");
     expect(DEFAULT_SETTINGS.compoundAnswer).toBe("random");
-    expect(settingsSummary({ ...DEFAULT_SETTINGS, mode: "compound", compoundAnswer: "both" })).toBe("10問・5分・問題毎判定・化合物・標準・出題 イオン式・イオン名・解答 式と名");
+    expect(settingsSummary({ ...DEFAULT_SETTINGS, mode: "compound", compoundAnswer: "both" })).toBe("10問・5分・問題毎判定・化合物・やさしめ・出題 イオン式・イオン名・解答 式と名");
     const html = renderToStaticMarkup(createElement(CompetitionSettingsForm, {
       value: { ...DEFAULT_SETTINGS, mode: "compound" }, onChange: () => {},
     }));
@@ -89,7 +89,7 @@ describe("Task 6 review fixes", () => {
     expect(html).toContain("<svg");
     expect(html).toContain("aria-label=\"参加用QRコード");
     expect(html).not.toContain("qr-placeholder");
-    expect(html).toContain("10問・5分・問題毎判定・イオン・標準・出題 イオン式・イオン名・解答 式または名");
+    expect(html).toContain("10問・5分・問題毎判定・イオン・やさしめ・出題 イオン式・イオン名・解答 式または名");
     expect(html).toContain("ゲストさんを参加者から除外");
     expect(html).not.toContain("ホストさんを参加者から除外");
   });

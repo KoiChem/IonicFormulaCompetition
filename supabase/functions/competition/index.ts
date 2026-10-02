@@ -15,10 +15,10 @@ import postgres from "npm:postgres@3.4.9";
 
 // src/platform/postgres-database.ts
 function postgresQuery(input, values = []) {
-  let sql = input.replaceAll("`", '"').replace(/CAST\(unixepoch\('subsec'\) \* 1000 AS INTEGER\)/g, "floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint").replace(/CAST\(([^()]+) AS INTEGER\)/gi, "CAST($1 AS bigint)").replace(/json_object\(/g, "json_build_object(").replace(/json_each\(([^()]+)\)/g, "jsonb_array_elements(($1)::text::jsonb)").replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression, path) => {
-    const keys = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), (m) => m[1] ?? m[2]);
-    const extract = `((${expression})::text::jsonb #>> '{${keys.join(",")}}')`;
-    return ["correctCount", "elapsedCs", "rank"].includes(keys.at(-1)) ? `${extract}::bigint` : extract;
+  let sql = input.replaceAll("`", '"').replace(/CAST\(unixepoch\('subsec'\) \* 1000 AS INTEGER\)/g, "floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint").replace(/CAST\(([^()]+) AS INTEGER\)/gi, "CAST($1 AS bigint)").replace(/json_object\(/g, "json_build_object(").replace(/(?<!CROSS )\bJOIN\s+json_each\(/g, "CROSS JOIN LATERAL json_each(").replace(/json_each\(([^()]+)\)/g, "jsonb_array_elements(($1)::text::jsonb)").replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression, path) => {
+    const keys2 = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), (m) => m[1] ?? m[2]);
+    const extract = `((${expression})::text::jsonb #>> '{${keys2.join(",")}}')`;
+    return ["correctCount", "elapsedCs", "rank"].includes(keys2.at(-1)) ? `${extract}::bigint` : extract;
   }).replace(/MAX\((expires_at_ms|0),/g, "GREATEST($1,");
   const ignore = /\bINSERT OR IGNORE\b/i.test(sql);
   sql = sql.replace(/\bINSERT OR IGNORE\b/gi, "INSERT");
@@ -123,55 +123,6 @@ function postgresTransactions(connectionString) {
     }
   };
 }
-
-// src/platform/server-only.ts
-if (typeof document !== "undefined") {
-  throw new Error("This module is server-only");
-}
-
-// src/competition-core/state-machine.ts
-function effectiveRoomState(room, nowMs) {
-  if (room.storedState === "CANCELLED" || room.storedState === "EXPIRED") {
-    return room.storedState;
-  }
-  if (room.storedState === "FINISHED") return "FINISHED";
-  if ((room.storedState === "COUNTDOWN" || room.storedState === "RUNNING") && room.deadlineAtMs != null && nowMs >= room.deadlineAtMs) {
-    return "FINISHED";
-  }
-  if (room.storedState === "COUNTDOWN" && room.startAtMs != null && nowMs >= room.startAtMs) {
-    return "RUNNING";
-  }
-  return room.storedState;
-}
-
-// src/config/public.ts
-var PUBLIC_CONFIG = {
-  questionCounts: [5, 10, 15],
-  defaultQuestionCount: 10,
-  timeLimitMinutes: [3, 4, 5, 6, 7, 8, 9, 10],
-  defaultTimeLimitMinutes: 5,
-  participantLimits: {
-    classCompetition: 42,
-    mateMatch: 4
-  },
-  retentionMs: {
-    classCompetition: 7 * 24 * 60 * 60 * 1e3,
-    mateMatch: 24 * 60 * 60 * 1e3,
-    cancelledRoom: 24 * 60 * 60 * 1e3
-  },
-  waitingRoomLifetimeMs: 2 * 60 * 60 * 1e3,
-  pollingMs: {
-    lobby: 2e3,
-    runningParticipant: 5e3,
-    progress: 2e3,
-    participantFinished: 3e3
-  },
-  countdownSeconds: 5,
-  timingToleranceMs: {
-    aheadOfServer: 250,
-    behindServer: 2e3
-  }
-};
 
 // src/games/ionic-formula/data/ions.json
 var ions_default = [
@@ -2997,6 +2948,1666 @@ var compounds_default = [
   }
 ];
 
+// src/games/ionic-formula/data/complex-chemistry.json
+var complex_chemistry_default = {
+  schemaVersion: 3,
+  contentVersion: "complex-ions-2026-10-02",
+  migrationVersion: 2,
+  supportIons: [
+    {
+      id: "hydrogen",
+      formula: "H",
+      charge: 1,
+      name: "\u6C34\u7D20\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "monatomic",
+      requiresOxidationNumeral: false,
+      enabled: true,
+      ionQuestionEnabled: false,
+      chemistryClass: "support",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Counterion support for the two catalogued acids; disabled as an independent ion question."
+      }
+    }
+  ],
+  ions: [
+    {
+      id: "complex_ag_nh3_2",
+      formula: "[Ag(NH3)2]",
+      charge: 1,
+      name: "\u30B8\u30A2\u30F3\u30DF\u30F3\u9280(I)\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Ag",
+        oxidationState: 1,
+        ligands: [
+          {
+            formula: "NH3",
+            charge: 0,
+            count: 2,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 2
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_cu_nh3_4",
+      formula: "[Cu(NH3)4]",
+      charge: 2,
+      name: "\u30C6\u30C8\u30E9\u30A2\u30F3\u30DF\u30F3\u9285(II)\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Cu",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "NH3",
+            charge: 0,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_zn_nh3_4",
+      formula: "[Zn(NH3)4]",
+      charge: 2,
+      name: "\u30C6\u30C8\u30E9\u30A2\u30F3\u30DF\u30F3\u4E9C\u925B(II)\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Zn",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "NH3",
+            charge: 0,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_al_oh_4",
+      formula: "[Al(OH)4]",
+      charge: -1,
+      name: "\u30C6\u30C8\u30E9\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30A2\u30EB\u30DF\u30F3\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: false,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Al",
+        oxidationState: 3,
+        ligands: [
+          {
+            formula: "OH",
+            charge: -1,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_zn_oh_4",
+      formula: "[Zn(OH)4]",
+      charge: -2,
+      name: "\u30C6\u30C8\u30E9\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u4E9C\u925B(II)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Zn",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "OH",
+            charge: -1,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_fe_cn_6_ii",
+      formula: "[Fe(CN)6]",
+      charge: -4,
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(II)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Fe",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "CN",
+            charge: -1,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_fe_cn_6_iii",
+      formula: "[Fe(CN)6]",
+      charge: -3,
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(III)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Fe",
+        oxidationState: 3,
+        ligands: [
+          {
+            formula: "CN",
+            charge: -1,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_cu_cl_4",
+      formula: "[CuCl4]",
+      charge: -2,
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u9285(II)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Cu",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "Cl",
+            charge: -1,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_au_cl_4",
+      formula: "[AuCl4]",
+      charge: -1,
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u91D1(III)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Au",
+        oxidationState: 3,
+        ligands: [
+          {
+            formula: "Cl",
+            charge: -1,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_pt_cl_6",
+      formula: "[PtCl6]",
+      charge: -2,
+      name: "\u30D8\u30AD\u30B5\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(IV)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: true,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      complex: {
+        centralElement: "Pt",
+        oxidationState: 4,
+        ligands: [
+          {
+            formula: "Cl",
+            charge: -1,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_ag_cn_2",
+      formula: "[Ag(CN)2]",
+      charge: -1,
+      name: "\u30B8\u30B7\u30A2\u30CB\u30C9\u9280(I)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Ag",
+        oxidationState: 1,
+        ligands: [
+          {
+            formula: "CN",
+            charge: -1,
+            count: 2,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 2
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_ni_nh3_6",
+      formula: "[Ni(NH3)6]",
+      charge: 2,
+      name: "\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30CB\u30C3\u30B1\u30EB(II)\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Ni",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "NH3",
+            charge: 0,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_co_nh3_6",
+      formula: "[Co(NH3)6]",
+      charge: 3,
+      name: "\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30B3\u30D0\u30EB\u30C8(III)\u30A4\u30AA\u30F3",
+      type: "cation",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Co",
+        oxidationState: 3,
+        ligands: [
+          {
+            formula: "NH3",
+            charge: 0,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_au_cl_2",
+      formula: "[AuCl2]",
+      charge: -1,
+      name: "\u30B8\u30AF\u30ED\u30EA\u30C9\u91D1(I)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Au",
+        oxidationState: 1,
+        ligands: [
+          {
+            formula: "Cl",
+            charge: -1,
+            count: 2,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 2
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_pt_cl_4",
+      formula: "[PtCl4]",
+      charge: -2,
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(II)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Pt",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "Cl",
+            charge: -1,
+            count: 4,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 4
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_sn_oh_3",
+      formula: "[Sn(OH)3]",
+      charge: -1,
+      name: "\u30C8\u30EA\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30B9\u30BA(II)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Sn",
+        oxidationState: 2,
+        ligands: [
+          {
+            formula: "OH",
+            charge: -1,
+            count: 3,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 3
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    },
+    {
+      id: "complex_sn_oh_6",
+      formula: "[Sn(OH)6]",
+      charge: -2,
+      name: "\u30D8\u30AD\u30B5\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30B9\u30BA(IV)\u9178\u30A4\u30AA\u30F3",
+      type: "anion",
+      atomicity: "polyatomic",
+      requiresOxidationNumeral: true,
+      enabled: false,
+      ionQuestionEnabled: true,
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      complex: {
+        centralElement: "Sn",
+        oxidationState: 4,
+        ligands: [
+          {
+            formula: "OH",
+            charge: -1,
+            count: 6,
+            denticity: 1
+          }
+        ],
+        coordinationNumber: 6
+      },
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Charge and oxidation state reviewed; isolation and hydration not individually established."
+      }
+    }
+  ],
+  compounds: [
+    {
+      id: "salt_na_al_oh_4",
+      formula: "Na[Al(OH)4]",
+      name: "\u30C6\u30C8\u30E9\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30A2\u30EB\u30DF\u30F3\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_al_oh_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: true,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na2_zn_oh_4",
+      formula: "Na2[Zn(OH)4]",
+      name: "\u30C6\u30C8\u30E9\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u4E9C\u925B(II)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_zn_oh_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: true,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k4_fe_cn_6",
+      formula: "K4[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(II)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_fe_cn_6_ii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: true,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k3_fe_cn_6",
+      formula: "K3[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(III)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_fe_cn_6_iii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: true,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "standard",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_ag_nh3_2_no3",
+      formula: "[Ag(NH3)2]NO3",
+      name: "\u785D\u9178\u30B8\u30A2\u30F3\u30DF\u30F3\u9280(I)",
+      cation: "complex_ag_nh3_2",
+      anion: "nitrate",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_ag_nh3_2_cl",
+      formula: "[Ag(NH3)2]Cl",
+      name: "\u5869\u5316\u30B8\u30A2\u30F3\u30DF\u30F3\u9280(I)",
+      cation: "complex_ag_nh3_2",
+      anion: "chloride",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_cu_nh3_4_so4",
+      formula: "[Cu(NH3)4]SO4",
+      name: "\u786B\u9178\u30C6\u30C8\u30E9\u30A2\u30F3\u30DF\u30F3\u9285(II)",
+      cation: "complex_cu_nh3_4",
+      anion: "sulfate",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_cu_nh3_4_no3",
+      formula: "[Cu(NH3)4](NO3)2",
+      name: "\u785D\u9178\u30C6\u30C8\u30E9\u30A2\u30F3\u30DF\u30F3\u9285(II)",
+      cation: "complex_cu_nh3_4",
+      anion: "nitrate",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_zn_nh3_4_cl",
+      formula: "[Zn(NH3)4]Cl2",
+      name: "\u5869\u5316\u30C6\u30C8\u30E9\u30A2\u30F3\u30DF\u30F3\u4E9C\u925B(II)",
+      cation: "complex_zn_nh3_4",
+      anion: "chloride",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k2_zn_oh_4",
+      formula: "K2[Zn(OH)4]",
+      name: "\u30C6\u30C8\u30E9\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u4E9C\u925B(II)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_zn_oh_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na4_fe_cn_6",
+      formula: "Na4[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(II)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_fe_cn_6_ii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_4_fe_cn_6",
+      formula: "(NH4)4[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(II)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_fe_cn_6_ii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na3_fe_cn_6",
+      formula: "Na3[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(III)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_fe_cn_6_iii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_3_fe_cn_6",
+      formula: "(NH4)3[Fe(CN)6]",
+      name: "\u30D8\u30AD\u30B5\u30B7\u30A2\u30CB\u30C9\u9244(III)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_fe_cn_6_iii",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k_ag_cn_2",
+      formula: "K[Ag(CN)2]",
+      name: "\u30B8\u30B7\u30A2\u30CB\u30C9\u9280(I)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_ag_cn_2",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na_ag_cn_2",
+      formula: "Na[Ag(CN)2]",
+      name: "\u30B8\u30B7\u30A2\u30CB\u30C9\u9280(I)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_ag_cn_2",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_ni_nh3_6_cl",
+      formula: "[Ni(NH3)6]Cl2",
+      name: "\u5869\u5316\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30CB\u30C3\u30B1\u30EB(II)",
+      cation: "complex_ni_nh3_6",
+      anion: "chloride",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_ni_nh3_6_no3",
+      formula: "[Ni(NH3)6](NO3)2",
+      name: "\u785D\u9178\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30CB\u30C3\u30B1\u30EB(II)",
+      cation: "complex_ni_nh3_6",
+      anion: "nitrate",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_co_nh3_6_cl",
+      formula: "[Co(NH3)6]Cl3",
+      name: "\u5869\u5316\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30B3\u30D0\u30EB\u30C8(III)",
+      cation: "complex_co_nh3_6",
+      anion: "chloride",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_co_nh3_6_no3",
+      formula: "[Co(NH3)6](NO3)3",
+      name: "\u785D\u9178\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30B3\u30D0\u30EB\u30C8(III)",
+      cation: "complex_co_nh3_6",
+      anion: "nitrate",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_co_nh3_6_br",
+      formula: "[Co(NH3)6]Br3",
+      name: "\u81ED\u5316\u30D8\u30AD\u30B5\u30A2\u30F3\u30DF\u30F3\u30B3\u30D0\u30EB\u30C8(III)",
+      cation: "complex_co_nh3_6",
+      anion: "bromide",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k2_cu_cl_4",
+      formula: "K2[CuCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u9285(II)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_cu_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_2_cu_cl_4",
+      formula: "(NH4)2[CuCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u9285(II)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_cu_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k_au_cl_2",
+      formula: "K[AuCl2]",
+      name: "\u30B8\u30AF\u30ED\u30EA\u30C9\u91D1(I)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_au_cl_2",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "unverified",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Included by user request; individual evidence for simple K/Na gold(I) salts was not verified."
+      }
+    },
+    {
+      id: "salt_na_au_cl_2",
+      formula: "Na[AuCl2]",
+      name: "\u30B8\u30AF\u30ED\u30EA\u30C9\u91D1(I)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_au_cl_2",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "unverified",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Included by user request; individual evidence for simple K/Na gold(I) salts was not verified."
+      }
+    },
+    {
+      id: "salt_k_au_cl_4",
+      formula: "K[AuCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u91D1(III)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_au_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na_au_cl_4",
+      formula: "Na[AuCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u91D1(III)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_au_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_au_cl_4",
+      formula: "NH4[AuCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u91D1(III)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_au_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k2_pt_cl_4",
+      formula: "K2[PtCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(II)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_pt_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na2_pt_cl_4",
+      formula: "Na2[PtCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(II)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_pt_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_2_pt_cl_4",
+      formula: "(NH4)2[PtCl4]",
+      name: "\u30C6\u30C8\u30E9\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(II)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_pt_cl_4",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k2_pt_cl_6",
+      formula: "K2[PtCl6]",
+      name: "\u30D8\u30AD\u30B5\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(IV)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_pt_cl_6",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na2_pt_cl_6",
+      formula: "Na2[PtCl6]",
+      name: "\u30D8\u30AD\u30B5\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(IV)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_pt_cl_6",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_nh4_2_pt_cl_6",
+      formula: "(NH4)2[PtCl6]",
+      name: "\u30D8\u30AD\u30B5\u30AF\u30ED\u30EA\u30C9\u767D\u91D1(IV)\u9178\u30A2\u30F3\u30E2\u30CB\u30A6\u30E0",
+      cation: "ammonium",
+      anion: "complex_pt_cl_6",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_na2_sn_oh_6",
+      formula: "Na2[Sn(OH)6]",
+      name: "\u30D8\u30AD\u30B5\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30B9\u30BA(IV)\u9178\u30CA\u30C8\u30EA\u30A6\u30E0",
+      cation: "sodium",
+      anion: "complex_sn_oh_6",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    },
+    {
+      id: "salt_k2_sn_oh_6",
+      formula: "K2[Sn(OH)6]",
+      name: "\u30D8\u30AD\u30B5\u30D2\u30C9\u30ED\u30AD\u30B7\u30C9\u30B9\u30BA(IV)\u9178\u30AB\u30EA\u30A6\u30E0",
+      cation: "potassium",
+      anion: "complex_sn_oh_6",
+      solidColor: null,
+      solidColorNote: null,
+      enabled: false,
+      questionModes: {
+        nameToFormula: true,
+        formulaToName: true,
+        ionsToFormula: true,
+        ionsToName: true,
+        ionNamesToFormula: true,
+        ionNamesToName: true
+      },
+      chemistryClass: "complex",
+      curriculumLevel: "advanced",
+      evidence: {
+        status: "composition_reviewed",
+        sourceDocument: "docs/COMPLEX_IONS_USER_CATALOG.md",
+        note: "Composition formula for learning; hydration and isolation form not individually established."
+      }
+    }
+  ],
+  retiredCompoundIds: [
+    "acid_h_au_cl_4",
+    "acid_h2_pt_cl_6"
+  ]
+};
+
+// src/games/ionic-formula/shared/complex-policy.ts
+var CHEMISTRY_CONTENT_VERSION = "complex-ions-2026-10-02";
+function isComplexItem(item, ionById2 = /* @__PURE__ */ new Map()) {
+  return item.chemistryClass === "complex" || !!item.formula?.includes("[") || [item.cation, item.anion].some((id) => !!id && ionById2.get(id)?.chemistryClass === "complex");
+}
+function complexItemAllowed(item, enabled, ionById2) {
+  return !isComplexItem(item, ionById2) || enabled === true;
+}
+
+// src/games/ionic-formula/shared/question-profile.ts
+var ions = [...ions_default, ...complex_chemistry_default.supportIons, ...complex_chemistry_default.ions];
+var ionMap = new Map(ions.map((i) => [i.id, i]));
+function defaultDifficulty(i) {
+  return !i.enabled ? "off" : i.difficulty === "normal" || i.difficulty === "hard" ? i.difficulty : "both";
+}
+function gcd(a, b) {
+  return b ? gcd(b, a % b) : Math.abs(a);
+}
+function questionProfileCatalog() {
+  return {
+    ions: ions.filter((i) => !("ionQuestionEnabled" in i) || i.ionQuestionEnabled !== false).map((i) => ({ id: i.id, formula: `${i.formula}${Math.abs(i.charge) === 1 ? "" : Math.abs(i.charge)}${i.charge > 0 ? "+" : "-"}`, name: i.name, complex: isComplexItem(i, ionMap), category: i.requiresOxidationNumeral ? "ionVariableOx" : i.atomicity === "polyatomic" ? "ionPolyatomic" : "ionSimple", defaultDifficulty: defaultDifficulty(i) })),
+    compounds: [...compounds_default, ...complex_chemistry_default.compounds].map((i) => {
+      const c = ionMap.get(i.cation);
+      const a = ionMap.get(i.anion);
+      return { id: i.id, formula: i.formula ?? "", name: i.name, complex: isComplexItem(i, ionMap), category: c.requiresOxidationNumeral || a.requiresOxidationNumeral ? "variableOx" : c.atomicity === "polyatomic" || a.atomicity === "polyatomic" ? "polyatomic" : Math.abs(a.charge) / gcd(c.charge, a.charge) === 1 && c.charge / gcd(c.charge, a.charge) === 1 ? "simple11" : "simpleRatio", defaultDifficulty: defaultDifficulty(i) };
+    })
+  };
+}
+function freeze(x) {
+  if (x && typeof x === "object") {
+    Object.values(x).forEach(freeze);
+    Object.freeze(x);
+  }
+  return x;
+}
+var DEFAULT_QUESTION_PROFILE = freeze({ version: 1, rules: { ion: { normal: { complexPercent: 10, categoryWeights: null }, hard: { complexPercent: 20, categoryWeights: null } }, compound: { normal: { complexPercent: 10, categoryWeights: null }, hard: { complexPercent: 20, categoryWeights: null } } }, ionDifficulties: {}, compoundDifficulties: {} });
+function object(x) {
+  if (!x || typeof x !== "object" || Array.isArray(x)) throw new TypeError("\u51FA\u984C\u8A2D\u5B9A\u304C\u4E0D\u6B63\u3067\u3059");
+  return x;
+}
+function keys(x, allowed, required2 = allowed) {
+  if (Object.keys(x).some((k) => !allowed.includes(k)) || required2.some((k) => !Object.hasOwn(x, k))) throw new TypeError("\u51FA\u984C\u8A2D\u5B9A\u306E\u9805\u76EE\u304C\u4E0D\u6B63\u3067\u3059");
+}
+function validateQuestionProfileShape(raw) {
+  const p = object(raw);
+  keys(p, ["version", "rules", "ionDifficulties", "compoundDifficulties"]);
+  if (p.version !== 1) throw new TypeError("\u51FA\u984C\u8A2D\u5B9A\u306E\u7248\u304C\u4E0D\u6B63\u3067\u3059");
+  const rules = object(p.rules);
+  keys(rules, ["ion", "compound"]);
+  const catalog = questionProfileCatalog();
+  for (const mode of ["ion", "compound"]) {
+    const levels = object(rules[mode]);
+    keys(levels, ["normal", "hard"]);
+    for (const level of ["normal", "hard"]) {
+      const r = object(levels[level]);
+      keys(r, ["complexPercent", "categoryWeights"]);
+      if (!Number.isInteger(r.complexPercent) || Number(r.complexPercent) < (level === "hard" ? 20 : 0) || Number(r.complexPercent) > 100) throw new TypeError("\u932F\u30A4\u30AA\u30F3\u306E\u5272\u5408\u304C\u4E0D\u6B63\u3067\u3059");
+      if (r.categoryWeights !== null) {
+        const w = object(r.categoryWeights);
+        const categories = mode === "ion" ? ["ionSimple", "ionPolyatomic", "ionVariableOx"] : ["simple11", "simpleRatio", "polyatomic", "variableOx"];
+        keys(w, categories, []);
+        if (Object.values(w).some((v) => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1e4) || Object.values(w).reduce((s, v) => s + Number(v), 0) <= 0) throw new TypeError("\u30AB\u30C6\u30B4\u30EA\u306E\u91CD\u307F\u304C\u4E0D\u6B63\u3067\u3059");
+      }
+    }
+    const overrides = object(p[mode === "ion" ? "ionDifficulties" : "compoundDifficulties"]);
+    const ids = new Set((mode === "ion" ? catalog.ions : catalog.compounds).map((i) => i.id));
+    if (Object.entries(overrides).some(([id, v]) => !ids.has(id) || (typeof v !== "string" || !["normal", "hard", "both", "off"].includes(v)))) throw new TypeError("\u6559\u6750\u306E\u96E3\u6613\u5EA6\u304C\u4E0D\u6B63\u3067\u3059");
+  }
+  return structuredClone(p);
+}
+
+// src/persistence/db.ts
+var PersistenceConflictError = class extends Error {
+  constructor(code, message, status = 409, retryAfterSeconds) {
+    super(message);
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.name = "PersistenceConflictError";
+    this.status = status;
+  }
+  status;
+};
+async function loadCommandReceipt(database, roomId, actorId, requestId2, bodyHash2) {
+  const receipt2 = await database.prepare(
+    `SELECT c.body_hash, c.result_json
+     FROM command_receipts c JOIN rooms r ON r.id = c.room_id
+     WHERE c.room_id = ? AND c.actor_id = ? AND c.request_id = ?
+       AND c.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+       AND r.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)`
+  ).bind(roomId, actorId, requestId2).first();
+  if (!receipt2) return null;
+  if (receipt2.body_hash !== bodyHash2) {
+    throw new PersistenceConflictError("request_id_reused", "requestId was already used with another payload");
+  }
+  return JSON.parse(receipt2.result_json);
+}
+function json(value) {
+  return JSON.stringify(value);
+}
+function commandMarker(actorId, requestId2) {
+  return `${actorId}:${requestId2}:${crypto.randomUUID()}`;
+}
+function changed(result) {
+  return Number(result?.meta.changes ?? 0) > 0;
+}
+function isRetryableDatabaseConflict(error) {
+  if (typeof error !== "object" || error === null) return false;
+  const value = error;
+  if (value.code === "SQLITE_BUSY" || value.code === "SQLITE_LOCKED") return true;
+  return typeof value.message === "string" && /(?:database.*(?:busy|locked)|D1_ERROR.*conflict)/i.test(value.message);
+}
+
+// src/persistence/question-profiles.ts
+async function readQuestionProfile(database) {
+  const row = await database.prepare("SELECT profile_json, revision FROM question_profiles WHERE id = 1").first();
+  return row ? { profile: validateQuestionProfileShape(JSON.parse(row.profile_json)), revision: row.revision } : { profile: structuredClone(DEFAULT_QUESTION_PROFILE), revision: 0 };
+}
+async function readRoomQuestionProfile(database, roomId) {
+  const row = await database.prepare("SELECT profile_json FROM room_question_profiles WHERE room_id = ?").bind(roomId).first();
+  return row ? validateQuestionProfileShape(JSON.parse(row.profile_json)) : null;
+}
+async function updateQuestionProfile(database, input) {
+  const receipt2 = async () => {
+    const row = await database.prepare("SELECT body_hash, result_json FROM question_profile_receipts WHERE teacher_id = ? AND request_id = ?").bind(input.teacherId, input.requestId).first();
+    if (!row) return null;
+    if (row.body_hash !== input.bodyHash) throw new PersistenceConflictError("request_id_reused", "\u64CD\u4F5CID\u304C\u5225\u306E\u5909\u66F4\u306B\u4F7F\u308F\u308C\u3066\u3044\u307E\u3059");
+    return JSON.parse(row.result_json);
+  };
+  const previous = await receipt2();
+  if (previous) return previous;
+  const result = { profile: input.profile, revision: input.expectedRevision + 1 };
+  const marker = commandMarker(`question-profile:${input.teacherId}`, input.requestId);
+  const statements = [
+    database.prepare("INSERT INTO question_profiles (id, profile_json, revision, updated_at_ms) VALUES (1, ?, 0, 0) ON CONFLICT(id) DO NOTHING").bind(json(DEFAULT_QUESTION_PROFILE)),
+    database.prepare(`UPDATE question_profiles SET profile_json = ?, revision = revision + 1, updated_at_ms = ?, last_command_id = ? WHERE id = 1 AND revision = ? AND NOT EXISTS (SELECT 1 FROM question_profile_receipts WHERE teacher_id = ? AND request_id = ?)`).bind(json(input.profile), input.nowMs, marker, input.expectedRevision, input.teacherId, input.requestId),
+    database.prepare(`INSERT INTO question_profile_receipts (teacher_id, request_id, body_hash, result_json) SELECT ?, ?, ?, ? FROM question_profiles WHERE id = 1 AND last_command_id = ?`).bind(input.teacherId, input.requestId, input.bodyHash, json(result), marker)
+  ];
+  try {
+    const batch = await database.batch(statements);
+    if (changed(batch[1])) return result;
+  } catch (error) {
+    const committed = await receipt2();
+    if (committed) return committed;
+    throw error;
+  }
+  const raced = await receipt2();
+  if (raced) return raced;
+  throw new PersistenceConflictError("stale_question_profile", "\u8A2D\u5B9A\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F\u3002\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304F\u3060\u3055\u3044");
+}
+
+// src/platform/server-only.ts
+if (typeof document !== "undefined") {
+  throw new Error("This module is server-only");
+}
+
+// src/competition-core/state-machine.ts
+function effectiveRoomState(room, nowMs) {
+  if (room.storedState === "CANCELLED" || room.storedState === "EXPIRED") {
+    return room.storedState;
+  }
+  if (room.storedState === "FINISHED") return "FINISHED";
+  if ((room.storedState === "COUNTDOWN" || room.storedState === "RUNNING") && room.deadlineAtMs != null && nowMs >= room.deadlineAtMs) {
+    return "FINISHED";
+  }
+  if (room.storedState === "COUNTDOWN" && room.startAtMs != null && nowMs >= room.startAtMs) {
+    return "RUNNING";
+  }
+  return room.storedState;
+}
+
+// src/config/public.ts
+var PUBLIC_CONFIG = {
+  questionCounts: [5, 10, 15],
+  defaultQuestionCount: 10,
+  timeLimitMinutes: [3, 4, 5, 6, 7, 8, 9, 10],
+  defaultTimeLimitMinutes: 5,
+  participantLimits: {
+    classCompetition: 42,
+    mateMatch: 4
+  },
+  retentionMs: {
+    classCompetition: 7 * 24 * 60 * 60 * 1e3,
+    mateMatch: 24 * 60 * 60 * 1e3,
+    cancelledRoom: 24 * 60 * 60 * 1e3
+  },
+  waitingRoomLifetimeMs: 2 * 60 * 60 * 1e3,
+  pollingMs: {
+    lobby: 2e3,
+    runningParticipant: 5e3,
+    progress: 2e3,
+    participantFinished: 3e3
+  },
+  countdownSeconds: 5,
+  timingToleranceMs: {
+    aheadOfServer: 250,
+    behindServer: 2e3
+  }
+};
+
 // src/games/ionic-formula/data/difficulty.json
 var difficulty_default = {
   version: 4,
@@ -3023,10 +4634,10 @@ var difficulty_default = {
 };
 
 // src/games/ionic-formula/server/question-generator.ts
-var ions = ions_default;
-var compounds = compounds_default;
+var ions2 = [...ions_default, ...complex_chemistry_default.supportIons, ...complex_chemistry_default.ions];
+var compounds = [...compounds_default, ...complex_chemistry_default.compounds];
 var difficulty = difficulty_default;
-var ionById = new Map(ions.map((ion) => [ion.id, ion]));
+var ionById = new Map(ions2.map((ion) => [ion.id, ion]));
 function deepFreeze(value) {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
   for (const nested of Object.values(value)) deepFreeze(nested);
@@ -3050,10 +4661,10 @@ function compoundCategory(compound) {
   if (!cation || !anion) return null;
   if (cation.requiresOxidationNumeral || anion.requiresOxidationNumeral) return "variableOx";
   if (cation.atomicity === "polyatomic" || anion.atomicity === "polyatomic") return "polyatomic";
-  const divisor = gcd(cation.charge, anion.charge);
+  const divisor = gcd2(cation.charge, anion.charge);
   return Math.abs(anion.charge) / divisor === 1 && cation.charge / divisor === 1 ? "simple11" : "simpleRatio";
 }
-function gcd(a, b) {
+function gcd2(a, b) {
   let left = Math.abs(a);
   let right = Math.abs(b);
   while (right) [left, right] = [right, left % right];
@@ -3088,15 +4699,67 @@ function compoundSupports(compound, variant) {
   const namedNameMode = Boolean(modes.ionNamesToName ?? modes.ionsToName);
   return (!formulaPrompt || (!formulaAnswer || formulaMode) && (!nameAnswer || nameMode)) && (!namePrompt || (!formulaAnswer || namedFormulaMode) && (!nameAnswer || namedNameMode));
 }
-function candidates(settings) {
+function legacyCandidates(settings) {
   const weights = difficulty.categoryWeights[settings.mode][settings.difficulty];
   if (settings.mode === "ion") {
-    return ions.filter((ion) => ion.enabled && ion.ionQuestionEnabled !== false && availableAtDifficulty(ion, settings.difficulty)).map((item) => ({ item, category: ionCategory(item), variants: ionVariants(settings) })).filter((candidate) => weights[candidate.category] > 0);
+    return ions2.filter((ion) => ion.enabled && ion.ionQuestionEnabled !== false && availableAtDifficulty(ion, settings.difficulty) && complexItemAllowed(ion, settings.complexEnabled, ionById)).map((item) => ({ item, category: ionCategory(item), variants: ionVariants(settings) })).filter((candidate) => weights[candidate.category] > 0);
   }
   const variants = compoundVariants(settings);
-  return compounds.filter((compound) => compound.enabled && availableAtDifficulty(compound, settings.difficulty)).map((item) => ({ item, category: compoundCategory(item), variants: variants.filter((variant) => compoundSupports(item, variant)) })).filter((candidate) => candidate.category && weights[candidate.category] > 0 && candidate.variants.length);
+  return compounds.filter((compound) => compound.enabled && availableAtDifficulty(compound, settings.difficulty) && complexItemAllowed(compound, settings.complexEnabled, ionById)).map((item) => ({ item, category: compoundCategory(item), variants: variants.filter((variant) => compoundSupports(item, variant)) })).filter((candidate) => candidate.category && weights[candidate.category] > 0 && candidate.variants.length);
 }
-function validateGameSettings(settings) {
+function candidates(settings, profile) {
+  if (profile === null) return legacyCandidates(settings);
+  const rule = profile.rules[settings.mode][settings.difficulty];
+  const overrides = settings.mode === "ion" ? profile.ionDifficulties : profile.compoundDifficulties;
+  const source = settings.mode === "ion" ? ions2.filter((i) => i.ionQuestionEnabled !== false) : compounds;
+  return source.filter((item) => {
+    const membership = overrides[item.id] ?? (!item.enabled ? "off" : item.difficulty ?? "both");
+    return (membership === "both" || membership === settings.difficulty) && complexItemAllowed(item, settings.complexEnabled, ionById);
+  }).map((item) => ({ item, category: "charge" in item ? ionCategory(item) : compoundCategory(item), variants: "charge" in item ? ionVariants(settings) : compoundVariants(settings).filter((v) => compoundSupports(item, v)) })).filter((c) => c.category && c.variants.length && (isComplexItem(c.item, ionById) || (rule.categoryWeights !== null ? (rule.categoryWeights[c.category] ?? 0) > 0 : Object.hasOwn(overrides, c.item.id) || difficulty.categoryWeights[settings.mode][settings.difficulty][c.category] > 0)));
+}
+function allocations(pool, count, weights) {
+  if (pool.length < count) throw new RangeError("\u51FA\u984C\u8A2D\u5B9A\u306E\u6559\u6750\u6570\u304C\u4E0D\u8DB3\u3057\u3066\u3044\u307E\u3059");
+  if (weights === null) return null;
+  const categories = Object.keys(weights).filter((k) => weights[k] > 0);
+  const total = categories.reduce((sum, k) => sum + weights[k], 0);
+  const parts = categories.map((category) => ({ category, exact: count * weights[category] / total, count: Math.floor(count * weights[category] / total) }));
+  let remaining = count - parts.reduce((sum, p) => sum + p.count, 0);
+  for (const p of [...parts].sort((a, b) => b.exact - b.count - (a.exact - a.count) || a.category.localeCompare(b.category))) {
+    if (remaining-- > 0) p.count++;
+  }
+  for (const p of parts) if (pool.filter((c) => c.category === p.category).length < p.count) throw new RangeError(`\u30AB\u30C6\u30B4\u30EA\u300C${{ ionSimple: "\u5358\u539F\u5B50\u30A4\u30AA\u30F3", ionPolyatomic: "\u591A\u539F\u5B50\u30A4\u30AA\u30F3", ionVariableOx: "\u4FA1\u6570\u304C\u5909\u308F\u308B\u30A4\u30AA\u30F3", simple11: "1\u5BFE1\u306E\u5316\u5408\u7269", simpleRatio: "\u7D44\u6210\u6BD4\u304C\u3042\u308B\u5316\u5408\u7269", polyatomic: "\u591A\u539F\u5B50\u30A4\u30AA\u30F3\u3092\u542B\u3080\u5316\u5408\u7269", variableOx: "\u4FA1\u6570\u304C\u5909\u308F\u308B\u5316\u5408\u7269" }[p.category]}\u300D\u306E\u6559\u6750\u6570\u304C\u4E0D\u8DB3\u3057\u3066\u3044\u307E\u3059`);
+  return new Map(parts.map((p) => [p.category, p.count]));
+}
+function selectCandidates(settings, profile, random) {
+  const eligible = candidates(settings, profile);
+  if (profile === null) return shuffled(eligible, random).slice(0, settings.questionCount);
+  const quota = settings.complexEnabled ? Math.ceil(settings.questionCount * profile.rules[settings.mode][settings.difficulty].complexPercent / 100) : 0;
+  const complex = eligible.filter((c) => isComplexItem(c.item, ionById));
+  const ordinary = eligible.filter((c) => !isComplexItem(c.item, ionById));
+  if (complex.length < quota) throw new RangeError("\u932F\u30A4\u30AA\u30F3\u306E\u6307\u5B9A\u5272\u5408\u3092\u6E80\u305F\u3059\u6559\u6750\u6570\u304C\u4E0D\u8DB3\u3057\u3066\u3044\u307E\u3059");
+  const count = settings.questionCount - quota;
+  const quotas = allocations(ordinary, count, profile.rules[settings.mode][settings.difficulty].categoryWeights);
+  const selected = quotas ? [...quotas].flatMap(([category, n]) => shuffled(ordinary.filter((c) => c.category === category), random).slice(0, n)) : shuffled(ordinary, random).slice(0, count);
+  return shuffled([...shuffled(complex, random).slice(0, quota), ...selected], random);
+}
+function validateQuestionProfile(profile) {
+  const valid = validateQuestionProfileShape(profile);
+  for (const questionCount of [5, 10, 15]) for (const level of ["normal", "hard"]) for (const complexEnabled of [false, true]) {
+    const base = { questionCount, timeLimitMinutes: 5, mode: "ion", difficulty: level, complexEnabled, ionAnswer: "random", compoundAnswer: "random", compoundPrompts: { formula: true, name: true } };
+    const check = (settings) => {
+      try {
+        validateGameSettings(settings, valid);
+      } catch (error) {
+        throw new RangeError(`${settings.mode === "ion" ? "\u30A4\u30AA\u30F3" : "\u5316\u5408\u7269"}\u30FB${level === "normal" ? "\u3084\u3055\u3057\u3081" : "\u3084\u3084\u3080\u305A"}\u30FB${questionCount}\u554F\u30FB\u932F\u30A4\u30AA\u30F3${complexEnabled ? "\u3042\u308A" : "\u306A\u3057"}\uFF1A${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    for (const ionAnswer2 of ["formula", "name", "random"]) check({ ...base, ionAnswer: ionAnswer2 });
+    for (const compoundAnswer of ["formula", "name", "random", "both"]) for (const compoundPrompts of [{ formula: true, name: false }, { formula: false, name: true }, { formula: true, name: true }]) check({ ...base, mode: "compound", compoundAnswer, compoundPrompts });
+  }
+}
+function validateGameSettings(settings, profile = DEFAULT_QUESTION_PROFILE) {
+  if (settings.complexEnabled !== void 0 && typeof settings.complexEnabled !== "boolean") throw new TypeError("\u932F\u30A4\u30AA\u30F3\u8A2D\u5B9A\u304C\u4E0D\u6B63\u3067\u3059");
+  if (settings.chemistryContentVersion !== void 0 && settings.chemistryContentVersion !== CHEMISTRY_CONTENT_VERSION) throw new TypeError("\u6559\u6750\u306E\u7248\u304C\u4E0D\u6B63\u3067\u3059");
   if (settings.gradingMode !== void 0 && settings.gradingMode !== "immediate" && settings.gradingMode !== "deferred") throw new TypeError("\u5224\u5B9A\u65B9\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
   if (![5, 10, 15].includes(settings.questionCount)) throw new TypeError("\u554F\u984C\u6570\u306F5\u554F\u300110\u554F\u300115\u554F\u304B\u3089\u9078\u3093\u3067\u304F\u3060\u3055\u3044");
   if (![3, 4, 5, 6, 7, 8, 9, 10].includes(settings.timeLimitMinutes)) throw new TypeError("\u5236\u9650\u6642\u9593\u306F3\u5206\u304B\u308910\u5206\u3067\u3059");
@@ -3105,7 +4768,8 @@ function validateGameSettings(settings) {
   if (settings.mode === "ion" && !["formula", "name", "random"].includes(settings.ionAnswer)) throw new TypeError("\u30A4\u30AA\u30F3\u306E\u89E3\u7B54\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
   if (settings.mode === "compound" && !settings.compoundPrompts.formula && !settings.compoundPrompts.name) throw new TypeError("\u5316\u5408\u7269\u306E\u51FA\u984C\u5F62\u5F0F\u30921\u3064\u4EE5\u4E0A\u9078\u3093\u3067\u304F\u3060\u3055\u3044");
   if (settings.mode === "compound" && !["formula", "name", "random", "both"].includes(settings.compoundAnswer)) throw new TypeError("\u5316\u5408\u7269\u306E\u89E3\u7B54\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
-  const availableCount = candidates(settings).length;
+  const availableCount = candidates(settings, profile).length;
+  selectCandidates(settings, profile, () => 0.5);
   if (availableCount < settings.questionCount) throw new RangeError(`\u3053\u306E\u8A2D\u5B9A\u3067\u306F${settings.questionCount}\u554F\u3092\u7528\u610F\u3067\u304D\u307E\u305B\u3093`);
   return { availableCount, maxScore: settings.questionCount * (settings.mode === "compound" && settings.compoundAnswer === "both" ? 2 : 1) };
 }
@@ -3142,10 +4806,9 @@ function promptFor(item, variant, order) {
 function idFromRandom(random) {
   return Array.from({ length: 4 }, () => Math.floor(random() * 65536).toString(16).padStart(4, "0")).join("");
 }
-function generateQuestionSet(settings, random = Math.random) {
-  validateGameSettings(settings);
-  const eligible = candidates(settings);
-  const selected = shuffled(eligible, random).slice(0, settings.questionCount);
+function generateQuestionSet(settings, random = Math.random, profile = DEFAULT_QUESTION_PROFILE) {
+  validateGameSettings(settings, profile);
+  const selected = selectCandidates(settings, profile, random);
   const variantCounts = /* @__PURE__ */ new Map();
   const assignedVariants = /* @__PURE__ */ new Map();
   const assignmentOrder = shuffled(selected.map((_, index) => index), random).sort((left, right) => selected[left].variants.length - selected[right].variants.length);
@@ -3342,47 +5005,6 @@ function validateWaitCredit(input) {
   if (sourceActionAtMs >= nextAcceptedAtMs || waitMs > nextAcceptedAtMs - sourceActionAtMs) return 0;
   if (waitMs > nextRawElapsedMs - previousRawElapsedMs) return 0;
   return waitMs;
-}
-
-// src/persistence/db.ts
-var PersistenceConflictError = class extends Error {
-  constructor(code, message, status = 409, retryAfterSeconds) {
-    super(message);
-    this.code = code;
-    this.retryAfterSeconds = retryAfterSeconds;
-    this.name = "PersistenceConflictError";
-    this.status = status;
-  }
-  status;
-};
-async function loadCommandReceipt(database, roomId, actorId, requestId2, bodyHash2) {
-  const receipt2 = await database.prepare(
-    `SELECT c.body_hash, c.result_json
-     FROM command_receipts c JOIN rooms r ON r.id = c.room_id
-     WHERE c.room_id = ? AND c.actor_id = ? AND c.request_id = ?
-       AND c.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
-       AND r.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)`
-  ).bind(roomId, actorId, requestId2).first();
-  if (!receipt2) return null;
-  if (receipt2.body_hash !== bodyHash2) {
-    throw new PersistenceConflictError("request_id_reused", "requestId was already used with another payload");
-  }
-  return JSON.parse(receipt2.result_json);
-}
-function json(value) {
-  return JSON.stringify(value);
-}
-function commandMarker(actorId, requestId2) {
-  return `${actorId}:${requestId2}:${crypto.randomUUID()}`;
-}
-function changed(result) {
-  return Number(result?.meta.changes ?? 0) > 0;
-}
-function isRetryableDatabaseConflict(error) {
-  if (typeof error !== "object" || error === null) return false;
-  const value = error;
-  if (value.code === "SQLITE_BUSY" || value.code === "SQLITE_LOCKED") return true;
-  return typeof value.message === "string" && /(?:database.*(?:busy|locked)|D1_ERROR.*conflict)/i.test(value.message);
 }
 
 // src/persistence/actions.ts
@@ -4369,6 +5991,15 @@ async function createRoom(database, input) {
       MATE_CREATION_LIMIT
     )
   ];
+  if (input.questionProfile) {
+    statements.push(database.prepare(`INSERT INTO room_question_profiles (room_id, profile_json, profile_revision)
+      SELECT id, ?, ? FROM rooms WHERE id = ? AND last_command_id = ?`).bind(
+      json(input.questionProfile.profile),
+      input.questionProfile.revision,
+      input.roomId,
+      marker
+    ));
+  }
   if (input.host) {
     statements.push(database.prepare(`
       INSERT INTO participants (
@@ -4632,7 +6263,7 @@ async function updateRoomSettingsCommand(database, input) {
   };
   const marker = commandMarker(actorId, input.requestId);
   const statements = [database.prepare(`
-    UPDATE rooms SET settings_json = ?, max_score = ?, revision = revision + 1, last_command_id = ?
+    UPDATE rooms SET settings_json = ?, dataset_version = ?, max_score = ?, revision = revision + 1, last_command_id = ?
     WHERE id = ? AND state = 'WAITING' AND revision = ?
       AND NOT EXISTS (SELECT 1 FROM v2_room_manifests m WHERE m.room_id = rooms.id AND m.state != 'WAITING')
       AND expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
@@ -4642,6 +6273,7 @@ async function updateRoomSettingsCommand(database, input) {
       )
   `).bind(
     json(input.settings),
+    input.settings.chemistryContentVersion ?? "4",
     input.maxScore,
     marker,
     input.roomId,
@@ -5529,7 +7161,8 @@ function publicError(error) {
       rate_limited: "\u77ED\u6642\u9593\u306B\u4F5C\u6210\u3067\u304D\u308B\u56DE\u6570\u3092\u8D85\u3048\u307E\u3057\u305F",
       request_id_reused: "requestId \u304C\u5225\u306E\u64CD\u4F5C\u3067\u4F7F\u7528\u3055\u308C\u3066\u3044\u307E\u3059",
       stale_participant_revision: "\u5225\u306E\u753B\u9762\u3067\u72B6\u614B\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F",
-      stale_room_revision: "\u30EB\u30FC\u30E0\u306E\u72B6\u614B\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F"
+      stale_room_revision: "\u30EB\u30FC\u30E0\u306E\u72B6\u614B\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F",
+      stale_question_profile: "\u51FA\u984C\u8A2D\u5B9A\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F\u3002\u6700\u65B0\u306E\u8A2D\u5B9A\u3092\u8AAD\u307F\u76F4\u3057\u3066\u304F\u3060\u3055\u3044"
     };
     return {
       status,
@@ -5667,7 +7300,7 @@ function stringValue(value, name, maximum = 128) {
   }
   return value;
 }
-var FORMULA_TOKEN = /^(?:[A-Za-z]|[A-Z][a-z]?|\d+|[()])$/u;
+var FORMULA_TOKEN = /^(?:[A-Za-z]|[A-Z][a-z]?|\d+|[()[\]])$/u;
 function formulaEntryValue(value) {
   if (!isRecord(value)) throw new ApiError(400, "invalid_request", "\u56DE\u7B54\u304C\u4E0D\u6B63\u3067\u3059");
   assertKeys(value, ["tokens", "cursor", "charge"]);
@@ -5713,14 +7346,21 @@ function parseSettings(value) {
     "ionAnswer",
     "compoundPrompts",
     "compoundAnswer",
-    "gradingMode"
+    "gradingMode",
+    "complexEnabled",
+    "chemistryContentVersion"
   ]);
   if (!isRecord(value.compoundPrompts)) throw new ApiError(400, "invalid_settings", "\u51FA\u984C\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
   assertKeys(value.compoundPrompts, ["formula", "name"]);
   if (typeof value.compoundPrompts.formula !== "boolean" || typeof value.compoundPrompts.name !== "boolean") {
     throw new ApiError(400, "invalid_settings", "\u51FA\u984C\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
   }
-  const settings = { ...value, gradingMode: value.gradingMode ?? "immediate" };
+  const settings = {
+    ...value,
+    gradingMode: value.gradingMode ?? "immediate",
+    complexEnabled: value.complexEnabled === void 0 ? false : value.complexEnabled,
+    chemistryContentVersion: value.chemistryContentVersion === void 0 ? CHEMISTRY_CONTENT_VERSION : value.chemistryContentVersion
+  };
   try {
     validateGameSettings(settings);
   } catch {
@@ -6057,7 +7697,8 @@ function createApiHandlers(dependencies) {
     const idempotencyKey = requestId(value.requestId);
     const requestedV2 = isRecord(value.settings) && value.settings.gradingMode !== void 0;
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readQuestionProfile(dependencies.database);
+    const validated = validateGameSettings(settings, questionProfile.profile);
     const nowMs = dependencies.now();
     await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     const created = await createRoom(dependencies.database, {
@@ -6069,7 +7710,8 @@ function createApiHandlers(dependencies) {
       settings,
       gameId: "ionic-formula",
       gameVersion: requestedV2 ? "2" : "1",
-      datasetVersion: "4",
+      datasetVersion: CHEMISTRY_CONTENT_VERSION,
+      questionProfile,
       maxScore: validated.maxScore,
       actorKeyHash: await sha256(`teacher:${teacher.id}`),
       requestId: idempotencyKey,
@@ -6092,7 +7734,8 @@ function createApiHandlers(dependencies) {
     const nickname2 = normalizeNickname(value.nickname);
     const requestedV2 = isRecord(value.settings) && value.settings.gradingMode !== void 0;
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readQuestionProfile(dependencies.database);
+    const validated = validateGameSettings(settings, questionProfile.profile);
     const nowMs = dependencies.now();
     await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     const hostId = dependencies.randomUUID();
@@ -6105,7 +7748,8 @@ function createApiHandlers(dependencies) {
       settings,
       gameId: "ionic-formula",
       gameVersion: requestedV2 ? "2" : "1",
-      datasetVersion: "4",
+      datasetVersion: CHEMISTRY_CONTENT_VERSION,
+      questionProfile,
       maxScore: validated.maxScore,
       actorKeyHash: await sha256(`creator:${creationKey}`),
       requestId: requestId(value.requestId),
@@ -6174,7 +7818,8 @@ function createApiHandlers(dependencies) {
     const owner = await authorizeRoomOwner(dependencies, request, room);
     const expectedRevision = integerValue(value.expectedRevision, "expectedRevision");
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readRoomQuestionProfile(dependencies.database, room.id);
+    const validated = validateGameSettings(settings, questionProfile);
     const result = await updateRoomSettingsCommand(dependencies.database, {
       roomId: room.id,
       actorId: `${owner.kind}:${owner.id}`,
@@ -6195,6 +7840,7 @@ function createApiHandlers(dependencies) {
     requireUnexpired(room, nowMs);
     await authorizeRoomOwner(dependencies, request, room);
     const settings = parseSettings(JSON.parse(room.settings_json));
+    const questionProfile = await readRoomQuestionProfile(dependencies.database, room.id);
     if (room.game_version === "2") {
       return jsonResponse(await prepareV2Room(dependencies.database, {
         roomId: room.id,
@@ -6205,7 +7851,7 @@ function createApiHandlers(dependencies) {
         manifestId: dependencies.randomUUID(),
         evaluatorVersion: EVALUATOR_VERSION,
         gradingMode: settings.gradingMode ?? "immediate",
-        questions: generateQuestionSet(settings, dependencies.random)
+        questions: generateQuestionSet(settings, dependencies.random, questionProfile)
       }));
     }
     const startAtMs = nowMs + PUBLIC_CONFIG.countdownSeconds * 1e3;
@@ -6217,7 +7863,7 @@ function createApiHandlers(dependencies) {
       nowMs,
       startAtMs,
       deadlineAtMs: startAtMs + settings.timeLimitMinutes * 6e4,
-      questions: generateQuestionSet(settings, dependencies.random)
+      questions: generateQuestionSet(settings, dependencies.random, questionProfile)
     });
     return jsonResponse({
       state: started.state,
@@ -6557,6 +8203,33 @@ function createApiHandlers(dependencies) {
     await authorizeTeacherOwner(dependencies, request, room);
     return jsonResponse({ room: roomView(room, nowMs) });
   }, "result-summary");
+  const teacherQuestionProfile = (request) => safe(async () => {
+    const teacher = await requireApplicationTeacher(dependencies, request);
+    if (!dependencies.serverConfig.masterTeacherEmail || teacher.email !== dependencies.serverConfig.masterTeacherEmail) {
+      throw new ApiError(403, "master_required", "\u7BA1\u7406\u8005\u6559\u54E1\u306E\u307F\u64CD\u4F5C\u3067\u304D\u307E\u3059");
+    }
+    const catalog = questionProfileCatalog();
+    if (request.method === "GET") return jsonResponse({ ...await readQuestionProfile(dependencies.database), catalog });
+    if (request.method !== "PATCH") throw new ApiError(405, "method_not_allowed", "\u3053\u306E\u64CD\u4F5C\u306F\u5229\u7528\u3067\u304D\u307E\u305B\u3093");
+    const { value, bodyHash: bodyHash2 } = await readMutationBody(request);
+    assertKeys(value, ["requestId", "profile", "expectedRevision"]);
+    let profile;
+    try {
+      profile = validateQuestionProfileShape(value.profile);
+      validateQuestionProfile(profile);
+    } catch (error) {
+      throw new ApiError(400, "invalid_question_profile", error instanceof Error ? error.message : "\u51FA\u984C\u8A2D\u5B9A\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044");
+    }
+    const saved = await updateQuestionProfile(dependencies.database, {
+      teacherId: teacher.id,
+      requestId: requestId(value.requestId),
+      bodyHash: bodyHash2,
+      expectedRevision: integerValue(value.expectedRevision, "expectedRevision"),
+      profile,
+      nowMs: dependencies.now()
+    });
+    return jsonResponse({ ...saved, catalog });
+  });
   const teacherSiteSettings = (request) => safe(async () => {
     const teacher = await requireApplicationTeacher(dependencies, request);
     const nowMs = dependencies.now();
@@ -6614,6 +8287,7 @@ function createApiHandlers(dependencies) {
     return jsonResponse(view(current));
   });
   return {
+    teacherQuestionProfile,
     teacherSession,
     teacherAllowlist,
     publicConfig,
@@ -6775,6 +8449,7 @@ var topRoutes = {
   "/api/mate-rooms": { method: ["POST"], name: "createMateRoom" },
   "/api/teacher/session": { method: ["GET"], name: "teacherSession" },
   "/api/teacher/allowlist": { method: ["GET", "POST"], name: "teacherAllowlist" },
+  "/api/teacher/question-profile": { method: ["GET", "PATCH"], name: "teacherQuestionProfile" },
   "/api/teacher/site-settings": { method: ["GET", "PATCH"], name: "teacherSiteSettings" }
 };
 var roomRoutes = {

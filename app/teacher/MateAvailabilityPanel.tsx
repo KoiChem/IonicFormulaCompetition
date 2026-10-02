@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { patchJson } from "../../src/features/play/useRoomSync";
 type Settings = { enabled: boolean; revision: number };
 export function MateAvailabilityPanel() {
-  const [master, setMaster] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -13,14 +12,7 @@ export function MateAvailabilityPanel() {
     if (!response.ok) throw new Error("設定を取得できませんでした");
     setSettings(await response.json() as Settings);
   };
-  useEffect(() => {
-    let active = true;
-    void apiFetch("/api/teacher/session", { cache: "no-store" }).then(async response => await response.json() as { role?: string }).then(async session => {
-      if (active && session.role === "master") { setMaster(true); await reload(); }
-    }).catch(() => { if (active) setMessage("設定を取得できませんでした"); });
-    return () => { active = false; };
-  }, []);
-  if (!master) return null;
+  useEffect(() => { void reload().catch(() => setMessage("設定を取得できませんでした")); }, []);
   const update = async () => {
     if (!settings || busy) return;
     setBusy(true); setMessage("保存しています…");
@@ -28,5 +20,11 @@ export function MateAvailabilityPanel() {
     catch (error) { setMessage(error instanceof Error ? error.message : "保存できませんでした"); try { await reload(); } catch { /* Show the original failure. */ } }
     finally { setBusy(false); }
   };
-  return <section className="panel wide"><p className="eyebrow">MASTER TEACHER</p><h2>メイトマッチの作成</h2><p>既存のルームは設定をOFFにしても続行できます。</p><button type="button" role="switch" aria-checked={settings?.enabled ?? false} disabled={busy || !settings} onClick={() => void update()}>{settings?.enabled ? "新規作成を許可中（ON）" : "新規作成を停止中（OFF）"}</button>{message && <p role="status">{message}</p>}</section>;
+  return <section className="teacher-admin-card mate-availability-card" aria-labelledby="mate-availability-title">
+    <div className="teacher-card-heading"><span className="teacher-card-symbol" aria-hidden="true">⇄</span><div><p className="teacher-card-kicker">参加の管理</p><h2 id="mate-availability-title">メイトマッチの作成</h2></div></div>
+    <p>生徒が新しいメイトマッチを作れるかを設定します。</p>
+    <div className="teacher-availability-control"><div><strong>{settings ? settings.enabled ? "新規作成を許可中" : "新規作成を停止中" : "設定を確認中…"}</strong><span>既存のルームはそのまま続行できます。</span></div><button type="button" className="teacher-switch" role="switch" aria-label="メイトマッチの新規作成を許可" aria-checked={settings?.enabled ?? false} disabled={busy || !settings} onClick={() => void update()}><span className="teacher-switch-track" aria-hidden="true"><span className="teacher-switch-thumb"/></span><span>{settings?.enabled ? "ON" : "OFF"}</span></button></div>
+    {message && <p className="teacher-feedback" role="status">{message}</p>}
+    {!settings && <button type="button" className="teacher-text-action" disabled={busy} onClick={() => void reload().catch(() => setMessage("設定を取得できませんでした"))}>もう一度読み込む</button>}
+  </section>;
 }

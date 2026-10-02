@@ -1,10 +1,13 @@
+import { questionProfileCatalog, validateQuestionProfileShape } from "../games/ionic-formula/shared/question-profile";
+import { readQuestionProfile, readRoomQuestionProfile, updateQuestionProfile } from "../persistence/question-profiles";
+import { CHEMISTRY_CONTENT_VERSION } from "../games/ionic-formula/shared/complex-policy";
 import "./server-only";
 
 import { effectiveRoomState } from "../competition-core/state-machine";
 import type { RoomState } from "../competition-core/types";
 import { PUBLIC_CONFIG } from "../config/public";
 import { type ServerConfig } from "../config/server";
-import { generateQuestionSet, validateGameSettings } from "../games/ionic-formula/server/question-generator";
+import { generateQuestionSet, validateGameSettings, validateQuestionProfile } from "../games/ionic-formula/server/question-generator";
 import { EVALUATOR_VERSION } from "../games/ionic-formula/shared/answer-evaluator";
 import type {
   AnswerFieldId,
@@ -157,6 +160,7 @@ function publicError(error: unknown): { status: number; code: string; message: s
       request_id_reused: "requestId が別の操作で使用されています",
       stale_participant_revision: "別の画面で状態が更新されました",
       stale_room_revision: "ルームの状態が更新されました",
+      stale_question_profile: "出題設定が更新されました。最新の設定を読み直してください",
     };
     return {
       status,
@@ -292,7 +296,7 @@ function stringValue(value: unknown, name: string, maximum = 128): string {
   return value;
 }
 
-const FORMULA_TOKEN = /^(?:[A-Za-z]|[A-Z][a-z]?|\d+|[()])$/u;
+const FORMULA_TOKEN = /^(?:[A-Za-z]|[A-Z][a-z]?|\d+|[()[\]])$/u;
 
 function formulaEntryValue(value: unknown): FormulaEntry {
   if (!isRecord(value)) throw new ApiError(400, "invalid_request", "回答が不正です");
@@ -348,14 +352,15 @@ function parseSettings(value: unknown): IonicFormulaGameSettings {
   if (!isRecord(value)) throw new ApiError(400, "invalid_settings", "競技設定が不正です");
   assertKeys(value, [
     "questionCount", "timeLimitMinutes", "mode", "difficulty", "ionAnswer",
-    "compoundPrompts", "compoundAnswer", "gradingMode",
+    "compoundPrompts", "compoundAnswer", "gradingMode", "complexEnabled", "chemistryContentVersion",
   ]);
   if (!isRecord(value.compoundPrompts)) throw new ApiError(400, "invalid_settings", "出題形式が不正です");
   assertKeys(value.compoundPrompts, ["formula", "name"]);
   if (typeof value.compoundPrompts.formula !== "boolean" || typeof value.compoundPrompts.name !== "boolean") {
     throw new ApiError(400, "invalid_settings", "出題形式が不正です");
   }
-  const settings = { ...value, gradingMode: value.gradingMode ?? "immediate" } as IonicFormulaGameSettings;
+  const settings = { ...value, gradingMode: value.gradingMode ?? "immediate", complexEnabled: value.complexEnabled === undefined ? false : value.complexEnabled,
+    chemistryContentVersion: value.chemistryContentVersion === undefined ? CHEMISTRY_CONTENT_VERSION : value.chemistryContentVersion } as IonicFormulaGameSettings;
   try {
     validateGameSettings(settings);
   } catch {
@@ -767,7 +772,8 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     const idempotencyKey = requestId(value.requestId);
     const requestedV2 = isRecord(value.settings) && value.settings.gradingMode !== undefined;
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readQuestionProfile(dependencies.database);
+    const validated = validateGameSettings(settings, questionProfile.profile);
     const nowMs = dependencies.now();
     await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     const created = await createRoom(dependencies.database, {
@@ -779,7 +785,8 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       settings,
       gameId: "ionic-formula",
       gameVersion: requestedV2 ? "2" : "1",
-      datasetVersion: "4",
+      datasetVersion: CHEMISTRY_CONTENT_VERSION,
+      questionProfile,
       maxScore: validated.maxScore,
       actorKeyHash: await sha256(`teacher:${teacher.id}`),
       requestId: idempotencyKey,
@@ -803,7 +810,8 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     const nickname = normalizeNickname(value.nickname);
     const requestedV2 = isRecord(value.settings) && value.settings.gradingMode !== undefined;
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readQuestionProfile(dependencies.database);
+    const validated = validateGameSettings(settings, questionProfile.profile);
     const nowMs = dependencies.now();
     await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     const hostId = dependencies.randomUUID();
@@ -816,7 +824,8 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       settings,
       gameId: "ionic-formula",
       gameVersion: requestedV2 ? "2" : "1",
-      datasetVersion: "4",
+      datasetVersion: CHEMISTRY_CONTENT_VERSION,
+      questionProfile,
       maxScore: validated.maxScore,
       actorKeyHash: await sha256(`creator:${creationKey}`),
       requestId: requestId(value.requestId),
@@ -888,7 +897,8 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     const owner = await authorizeRoomOwner(dependencies, request, room);
     const expectedRevision = integerValue(value.expectedRevision, "expectedRevision");
     const settings = parseSettings(value.settings);
-    const validated = validateGameSettings(settings);
+    const questionProfile = await readRoomQuestionProfile(dependencies.database, room.id);
+    const validated = validateGameSettings(settings, questionProfile);
     const result = await updateRoomSettingsCommand(dependencies.database, {
       roomId: room.id,
       actorId: `${owner.kind}:${owner.id}`,
@@ -910,12 +920,13 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     requireUnexpired(room, nowMs);
     await authorizeRoomOwner(dependencies, request, room);
     const settings = parseSettings(JSON.parse(room.settings_json) as unknown);
+    const questionProfile = await readRoomQuestionProfile(dependencies.database, room.id);
     if (room.game_version === "2") {
       return jsonResponse(await prepareV2Room(dependencies.database, {
         roomId: room.id, requestId: requestId(value.requestId), bodyHash,
         expectedRoomRevision: integerValue(value.expectedRevision, "expectedRevision"), nowMs,
         manifestId: dependencies.randomUUID(), evaluatorVersion: EVALUATOR_VERSION,
-        gradingMode: settings.gradingMode ?? "immediate", questions: generateQuestionSet(settings, dependencies.random),
+        gradingMode: settings.gradingMode ?? "immediate", questions: generateQuestionSet(settings, dependencies.random, questionProfile),
       }));
     }
     const startAtMs = nowMs + PUBLIC_CONFIG.countdownSeconds * 1_000;
@@ -927,7 +938,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       nowMs,
       startAtMs,
       deadlineAtMs: startAtMs + settings.timeLimitMinutes * 60_000,
-      questions: generateQuestionSet(settings, dependencies.random),
+      questions: generateQuestionSet(settings, dependencies.random, questionProfile),
     });
     return jsonResponse({
       state: started.state,
@@ -1278,6 +1289,26 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     return jsonResponse({ room: roomView(room, nowMs) });
   }, "result-summary");
 
+  const teacherQuestionProfile = (request: Request) => safe(async () => {
+    const teacher = await requireApplicationTeacher(dependencies, request);
+    if (!dependencies.serverConfig.masterTeacherEmail || teacher.email !== dependencies.serverConfig.masterTeacherEmail) {
+      throw new ApiError(403, "master_required", "管理者教員のみ操作できます");
+    }
+    const catalog = questionProfileCatalog();
+    if (request.method === "GET") return jsonResponse({ ...await readQuestionProfile(dependencies.database), catalog });
+    if (request.method !== "PATCH") throw new ApiError(405, "method_not_allowed", "この操作は利用できません");
+    const { value, bodyHash } = await readMutationBody(request);
+    assertKeys(value, ["requestId", "profile", "expectedRevision"]);
+    let profile;
+    try { profile = validateQuestionProfileShape(value.profile); validateQuestionProfile(profile); }
+    catch (error) { throw new ApiError(400, "invalid_question_profile", error instanceof Error ? error.message : "出題設定を確認してください"); }
+    const saved = await updateQuestionProfile(dependencies.database, {
+      teacherId: teacher.id, requestId: requestId(value.requestId), bodyHash,
+      expectedRevision: integerValue(value.expectedRevision, "expectedRevision"), profile, nowMs: dependencies.now(),
+    });
+    return jsonResponse({ ...saved, catalog });
+  });
+
   const teacherSiteSettings = (request: Request) => safe(async () => {
     const teacher = await requireApplicationTeacher(dependencies, request);
     const nowMs = dependencies.now();
@@ -1338,6 +1369,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
   });
 
   return {
+    teacherQuestionProfile,
     teacherSession,
     teacherAllowlist,
     publicConfig,
