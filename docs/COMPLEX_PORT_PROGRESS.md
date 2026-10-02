@@ -20,3 +20,7 @@ Source initial HEAD 8e5378e; target baseline 07b3637. Existing branch clean.
 
 - Production profile MD5 8c5bb3939d18e0422a286065feed4092 matches full source; anonymous/authenticated direct table access denied. Updated competition Edge Function deployed successfully.
 - First Pages CI:453 tests passed; the 40,000-set statistical test hit its30s timeout on the slower runner. Extended only that test timeout to90s; sample count/assertions unchanged.
+- Pages Actions37016559850 build/test/deploy succeeded for17e25c1; served JS index-WSAl4GBG.js matches local build.
+- Public Safari real Google master: new management cards and all source ratios/category weights displayed. Created complex-enabled class room230736d7-83e6-4937-add6-0144d9dda23e. Playwright student answered all5 correctly, including [Al(OH)4]- and [Zn(OH)4]2-. Teacher/student final score5/time01:47.85 agree; student reload preserves results. No console errors or failed API responses observed.
+- Public two-context mate room01853ae7-a635-4d94-ac70-386aa00e76ef: compound/deferred/complexON5 questions contains exactly1 complex salt. Keyboard-entered Li2O and K3[Fe(CN)6] both correct; submitted score2 vspeer0, both browsers show matching ranks and times. Result reload works,390px peer has no horizontal overflow.
+- No original Site changes or production data deletion. Physical iPad touch and actual classroom concurrency remain unverified.
