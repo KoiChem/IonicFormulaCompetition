@@ -19,3 +19,4 @@ Source initial HEAD 8e5378e; target baseline 07b3637. Existing branch clean.
 - Additive production migration applied successfully; imported full source profile to target revision1,3091 characters. Import uses ON CONFLICT DO NOTHING to avoid overwriting a later edit. Existing rooms unchanged.
 
 - Production profile MD5 8c5bb3939d18e0422a286065feed4092 matches full source; anonymous/authenticated direct table access denied. Updated competition Edge Function deployed successfully.
+- First Pages CI:453 tests passed; the 40,000-set statistical test hit its30s timeout on the slower runner. Extended only that test timeout to90s; sample count/assertions unchanged.

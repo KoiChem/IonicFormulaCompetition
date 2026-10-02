@@ -168,7 +168,8 @@ describe("generateQuestionSet", () => {
       const tolerance = 6 * Math.sqrt(batches * probability * (1 - probability));
       for (const [itemId, count] of counts) expect(Math.abs(count - expected), `${mode}/${difficulty}/${itemId}`).toBeLessThan(tolerance);
     }
-  }, 30_000);
+  // Forty thousand generated sets take longer on shared CI runners.
+  }, 90_000);
 
   it("balances ion answer directions after selecting the same eligible items", () => {
     for (const questionCount of [5, 10, 15] as const) {
