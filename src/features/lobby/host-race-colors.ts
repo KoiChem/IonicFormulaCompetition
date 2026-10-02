@@ -1,6 +1,24 @@
-export const runnerPalette = ["#1763a6", "#0e746d", "#9b4c09", "#873e92", "#aa3038", "#3c6c12", "#8d4c13", "#2654a8", "#a33570", "#326e82", "#6d3f9f", "#a0442b", "#126f86", "#7a5260", "#506b18", "#8c4059", "#5356a3", "#2a6c50", "#7b5b20", "#9a396d"];
-// The class capacity is 42; use explicit RGB colors to avoid HSL rounding collisions.
-runnerPalette.push("#891a1a", "#23b84f", "#5b1a89", "#b8a623", "#1a7789", "#b82374", "#36891a", "#2923b8", "#893f1a", "#23b880", "#801a89", "#99b823", "#1a5189", "#b82342", "#1a8924", "#5b23b8", "#89641a", "#23b8b2", "#891a6d", "#67b823", "#1a2c89", "#b83623");
+const HUE_SLOTS = 42;
+const HUE_STEP = 17; // Coprime with 42: visits every hue, with ~146° between neighbors.
+const MIN_CHANNEL = 16;
+const MIN_CHANNEL_VARIANTS = 25;
+const MAX_CHANNEL = 96;
+const MAX_CHANNEL_VARIANTS = 49;
+const SHADE_VARIANTS = MIN_CHANNEL_VARIANTS * MAX_CHANNEL_VARIANTS;
+const INITIAL_SHADE = (132 - MAX_CHANNEL) * MIN_CHANNEL_VARIANTS + (21 - MIN_CHANNEL);
+
+function colorAtHue(hue: number, min: number, max: number): string {
+  const sector = hue / 60;
+  const rising = min + (max - min) * (sector % 1);
+  const falling = max - (max - min) * (sector % 1);
+  const channels = [
+    [max, rising, min], [falling, max, min], [min, max, rising],
+    [min, falling, max], [rising, min, max], [max, min, falling],
+  ][Math.floor(sector)];
+  return '#' + channels.map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('');
+}
+
+export const runnerPalette = Array.from({ length: HUE_SLOTS }, (_, slot) => colorAtHue(slot * 360 / HUE_SLOTS, 21, 132));
 
 function roomSeed(roomId: string): number {
   let seed = 2166136261;
@@ -8,21 +26,26 @@ function roomSeed(roomId: string): number {
   return (seed >>> 0) || 1;
 }
 
-/** Random room UUID is the seed; persistent joinedOrder is the fixed color slot. */
+function nextSeed(seed: number): number {
+  seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+  return seed >>> 0;
+}
+
+/** Random room UUID fixes the starting hue and direction; joinedOrder fixes identity. */
 export function colorForRunner(roomId: string, joinedOrder: number): string {
   const order = Number.isSafeInteger(joinedOrder) && joinedOrder > 0 ? joinedOrder : 1;
-  let seed = roomSeed(roomId);
-  const palette = [...runnerPalette];
-  for (let index = palette.length - 1; index > 0; index -= 1) {
-    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
-    const other = Math.floor((seed >>> 0) / 4294967296 * (index + 1));
-    [palette[index], palette[other]] = [palette[other], palette[index]];
-  }
-  if (order <= palette.length) return palette[order - 1];
-  // Removed participants keep their slots. Never wrap after 42 lifetime joins.
-  // Reserve red 0..7 for overflow, disjoint from every initial palette color.
-  // Permute 131072 dark RGB slots instead of rounded hue values.
-  const value = ((order - palette.length - 1) * 50657 + (roomSeed(roomId) & 131071)) % 131072;
-  const channels = [(value >>> 14) & 7, 32 + ((value >>> 7) & 127), 32 + (value & 127)];
-  return '#' + channels.map(channel => channel.toString(16).padStart(2, '0')).join('');
+  const seed = nextSeed(roomSeed(roomId));
+  const start = Math.floor(seed / 4294967296 * HUE_SLOTS);
+  const direction = (nextSeed(seed) & 1) === 0 ? 1 : -1;
+  const slot = (start + direction * ((order - 1) % HUE_SLOTS) * HUE_STEP % HUE_SLOTS + HUE_SLOTS) % HUE_SLOTS;
+  const cycle = Math.floor((order - 1) / HUE_SLOTS);
+  if (cycle === 0) return runnerPalette[slot];
+
+  // Removed participants keep their slots. Continue the hue spacing for replacements,
+  // varying RGB extrema per 42 lifetime joins so colors do not repeat after one class.
+  // All 1,225 shades are dark and chromatic; 51,450 distinct slots before repetition.
+  const shade = (INITIAL_SHADE + cycle % SHADE_VARIANTS) % SHADE_VARIANTS;
+  const min = MIN_CHANNEL + shade % MIN_CHANNEL_VARIANTS;
+  const max = MAX_CHANNEL + Math.floor(shade / MIN_CHANNEL_VARIANTS);
+  return colorAtHue(slot * 360 / HUE_SLOTS, min, max);
 }
