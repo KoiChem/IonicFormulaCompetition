@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 describe("host runner", () => {
   it("rests after confirmed deferred submission without sweat or celebration", () => {
     const html = renderToStaticMarkup(createElement(HostRace, {
+      roomId: "test-room",
       participants: [{ id: "writer", nickname: "入力者", status: "PLAYING", currentOrdinal: 0, correctCount: 0, answeredCount: 8, resolvedQuestionCount: 0, revision: 0, elapsedCs: null, timingSource: null, submitted: true }],
       mode: "deferred", maxScore: 10, active: true, pace: 0, remainingText: "01:23", interruptButton: null,
     }));
@@ -95,6 +96,7 @@ describe("host runner", () => {
   });
   it("shows a compact header and a celebrating full-score runner", () => {
     const html = renderToStaticMarkup(createElement(HostRace, {
+      roomId: "test-room",
       participants: [{ id: "winner", nickname: "優勝者", status: "PLAYING", currentOrdinal: 0, correctCount: 10, answeredCount: 10, resolvedQuestionCount: 10, revision: 0, elapsedCs: null, timingSource: null }],
       mode: "immediate", maxScore: 10, active: true, pace: 0,
       remainingText: "01:23", interruptButton: createElement("button", null, "中断"),
@@ -109,15 +111,25 @@ describe("host runner", () => {
   });
   it("keeps a deferred full-input runner running", () => {
     const html = renderToStaticMarkup(createElement(HostRace, {
+      roomId: "test-room",
       participants: [{ id: "writer", nickname: "入力者", status: "PLAYING", currentOrdinal: 0, correctCount: 0, answeredCount: 10, resolvedQuestionCount: 0, revision: 0, elapsedCs: null, timingSource: null }],
       mode: "deferred", maxScore: 10, active: true, pace: 0, remainingText: "01:23", interruptButton: null,
     }));
     expect(html).not.toContain("is-celebrating");
     expect(html).not.toContain("is-goal");
   });
+  it("uses the persistent join slot even when score order and participant order change", () => {
+    const participant = (id: string, joinedOrder: number, correctCount: number) => ({ id, joinedOrder, nickname: id, status: "ACTIVE", currentOrdinal: 0, correctCount, resolvedQuestionCount: 0, revision: 0, elapsedCs: null, timingSource: null });
+    const html = renderToStaticMarkup(createElement(HostRace, {
+      roomId: "test-room", participants: [participant("b", 2, 4), participant("a", 1, 0)],
+      mode: "immediate", maxScore: 5, active: true, pace: 0, remainingText: "01:23", interruptButton: null,
+    }));
+    const colors = [...html.matchAll(/style="color:([^;]+);/g)].map(match => match[1]);
+    expect(colors).toEqual([colorForRunner("test-room", 2), colorForRunner("test-room", 1)]);
+  });
   it("has at least eighteen stable dark runner colors", () => {
     expect(new Set(runnerPalette).size).toBeGreaterThanOrEqual(18);
-    expect(colorForRunner("runner-1")).toBe(colorForRunner("runner-1"));
+    expect(colorForRunner("test-room", 1)).toBe(colorForRunner("test-room", 1));
   });
 });
 

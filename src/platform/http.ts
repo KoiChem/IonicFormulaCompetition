@@ -106,6 +106,7 @@ type RoomRow = {
 };
 
 type ParticipantRow = {
+  readonly joined_order: number;
   readonly id: string;
   readonly nickname: string;
   readonly status: "ACTIVE" | "FINISHED" | "REMOVED";
@@ -492,7 +493,7 @@ async function tryFinalize(database: PersistenceDatabase, room: RoomRow, nowMs: 
 
 async function participantState(database: PersistenceDatabase, room: RoomRow, participantId: string, nowMs: number) {
   const participant = await database.prepare(`
-    SELECT id, nickname, status, current_ordinal, correct_count, resolved_question_count,
+    SELECT id, nickname, status, joined_order, current_ordinal, correct_count, resolved_question_count,
       revision, elapsed_cs, accepted_elapsed_ms, wait_credit_ms, timing_source
     FROM participants WHERE room_id = ? AND id = ? AND status != 'REMOVED'
   `).bind(room.id, participantId).first<ParticipantRow>();
@@ -520,6 +521,7 @@ async function participantState(database: PersistenceDatabase, room: RoomRow, pa
   return {
     participant: {
       id: participant.id,
+      joinedOrder: participant.joined_order,
       nickname: participant.nickname,
       status: participant.status,
       currentOrdinal: participant.current_ordinal,
@@ -537,7 +539,7 @@ async function participantState(database: PersistenceDatabase, room: RoomRow, pa
 
 async function teacherProgress(database: PersistenceDatabase, roomId: string) {
   const { results } = await database.prepare(`
-    SELECT id, nickname, status, current_ordinal, correct_count, resolved_question_count,
+    SELECT id, nickname, status, joined_order, current_ordinal, correct_count, resolved_question_count,
       revision, elapsed_cs, timing_source, COALESCE(v.answered_count, 0) AS answered_count,
       v.finished_elapsed_ms
     FROM participants p LEFT JOIN v2_participant_progress v ON v.room_id = p.room_id AND v.participant_id = p.id
@@ -545,6 +547,7 @@ async function teacherProgress(database: PersistenceDatabase, roomId: string) {
   `).bind(roomId).all<ParticipantRow & { answered_count: number; finished_elapsed_ms: number | null }>();
   return results.map((participant) => ({
     id: participant.id,
+    joinedOrder: participant.joined_order,
     nickname: participant.nickname,
     status: participant.status,
     currentOrdinal: participant.current_ordinal,

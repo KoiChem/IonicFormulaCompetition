@@ -3,6 +3,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
 import { PostgresDatabase } from '../../src/platform/postgres-database';
 import { createSupabaseGateway } from '../../src/platform/supabase-gateway';
+import { createParticipantToken } from '../../src/platform/participant-auth';
 import { flushRoomEvents } from '../../src/platform/realtime-outbox';
 let pg:PGlite;let now=Date.now();
 const user={id:'11111111-1111-4111-8111-111111111111',email:'teacher@example.com',email_confirmed_at:'2026-10-01',is_anonymous:false,identities:[{provider:'google'}]};
@@ -26,4 +27,14 @@ it('commits minimal events and removes each successfully delivered outbox record
  expect(delivered[0].payload).not.toHaveProperty('participants');
  expect(JSON.stringify(delivered)).not.toContain('token');
  expect((await pg.query('SELECT count(*)::int AS count FROM app_outbox')).rows).toEqual([{count:0}]);
+});
+it('preserves immutable join order in state and realtime progress payloads',async()=>{
+ const settings={questionCount:5,timeLimitMinutes:3,mode:'ion',difficulty:'normal',ionAnswer:'formula',compoundPrompts:{formula:true,name:false},compoundAnswer:'formula',gradingMode:'immediate'};
+ const call=(path:string,body?:unknown,token?:string)=>gateway(new Request('https://p.supabase.co/functions/v1/competition/api/'+path,{method:body?'POST':'GET',headers:{origin:'https://koichem.github.io','content-type':'application/json','x-competition-csrf':'1',...(token?{'x-participant-authorization':`Bearer ${token}`}:{})},body:body?JSON.stringify(body):undefined}));
+ const created=await call('class-rooms',{requestId:crypto.randomUUID(),settings});expect(created.status).toBe(201);const {room}=await created.json();
+ for(const nickname of ['Color A','Color B'])expect((await call(`rooms/${room.id}/join`,{nickname,requestId:crypto.randomUUID()},createParticipantToken())).status).toBe(201);
+ const state=await call(`rooms/${room.id}/state`);expect(state.status).toBe(200);
+ expect((await state.json()).participants.map((p:any)=>p.joinedOrder)).toEqual([1,2]);
+ const delivered:any[]=[];await flushRoomEvents(transact,room.id,async(_topic,event,payload)=>{delivered.push({event,payload})},now+2000);
+ expect(delivered.find(x=>x.event==='host.progress').payload.participants.map((p:any)=>p.joinedOrder)).toEqual([1,2]);
 });

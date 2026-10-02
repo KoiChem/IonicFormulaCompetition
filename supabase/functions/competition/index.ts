@@ -7471,7 +7471,7 @@ async function tryFinalize(database, room, nowMs) {
 }
 async function participantState(database, room, participantId, nowMs) {
   const participant = await database.prepare(`
-    SELECT id, nickname, status, current_ordinal, correct_count, resolved_question_count,
+    SELECT id, nickname, status, joined_order, current_ordinal, correct_count, resolved_question_count,
       revision, elapsed_cs, accepted_elapsed_ms, wait_credit_ms, timing_source
     FROM participants WHERE room_id = ? AND id = ? AND status != 'REMOVED'
   `).bind(room.id, participantId).first();
@@ -7498,6 +7498,7 @@ async function participantState(database, room, participantId, nowMs) {
   return {
     participant: {
       id: participant.id,
+      joinedOrder: participant.joined_order,
       nickname: participant.nickname,
       status: participant.status,
       currentOrdinal: participant.current_ordinal,
@@ -7514,7 +7515,7 @@ async function participantState(database, room, participantId, nowMs) {
 }
 async function teacherProgress(database, roomId) {
   const { results } = await database.prepare(`
-    SELECT id, nickname, status, current_ordinal, correct_count, resolved_question_count,
+    SELECT id, nickname, status, joined_order, current_ordinal, correct_count, resolved_question_count,
       revision, elapsed_cs, timing_source, COALESCE(v.answered_count, 0) AS answered_count,
       v.finished_elapsed_ms
     FROM participants p LEFT JOIN v2_participant_progress v ON v.room_id = p.room_id AND v.participant_id = p.id
@@ -7522,6 +7523,7 @@ async function teacherProgress(database, roomId) {
   `).bind(roomId).all();
   return results.map((participant) => ({
     id: participant.id,
+    joinedOrder: participant.joined_order,
     nickname: participant.nickname,
     status: participant.status,
     currentOrdinal: participant.current_ordinal,
@@ -8338,7 +8340,7 @@ async function readRoom(db, publicId) {
     FROM rooms r LEFT JOIN v2_room_manifests m ON m.room_id=r.id WHERE r.public_id=?`).bind(publicId).first();
 }
 async function readParticipants(db, id) {
-  return (await db.prepare(`SELECT p.id,p.nickname,p.status,p.current_ordinal,p.correct_count,p.resolved_question_count,p.revision,p.elapsed_cs,p.timing_source,
+  return (await db.prepare(`SELECT p.id,p.nickname,p.status,p.joined_order,p.current_ordinal,p.correct_count,p.resolved_question_count,p.revision,p.elapsed_cs,p.timing_source,
     COALESCE(v.answered_count,0) AS answered_count,v.finished_elapsed_ms,v.ready_generation
     FROM participants p LEFT JOIN v2_participant_progress v ON v.room_id=p.room_id AND v.participant_id=p.id
     WHERE p.room_id=? ORDER BY p.joined_order,p.id`).bind(id).all()).results;
@@ -8377,6 +8379,7 @@ async function queueRoomEvents(db, publicId, before, now) {
       const people = await readParticipants(db, room.id);
       event.participants = people.filter((p) => p.status !== "REMOVED").map((p) => ({
         id: p.id,
+        joinedOrder: p.joined_order,
         nickname: p.nickname,
         status: p.status,
         currentOrdinal: p.current_ordinal,

@@ -5,8 +5,8 @@ import type { ParticipantState } from "../play/useRoomSync";
 import { effectiveRaceMotion, increasedRaceIds, isRaceGoal, raceCapacity, raceCount, raceFollowStart, raceProgress, raceRows, raceScale, raceVisibleRange, type RaceMode, type RaceMotionChoice, type RaceRow } from "./host-race-model";
 import { colorForRunner } from "./host-race-colors";
 
-export function Runner({ id, goal, stopped, rest = false, dash = false }: { id: string; goal: boolean; stopped: boolean; rest?: boolean; dash?: boolean }) {
-  return <svg className={`race-runner ${goal ? "is-goal" : ""} ${stopped ? "is-stopped" : ""} ${rest ? "is-resting" : ""} ${dash ? "is-dashing" : ""}`} viewBox={rest ? "-38 -44 76 68" : "-36 -68 72 102"} aria-hidden="true" style={{ color: colorForRunner(id), "--runner-phase": `${(id.charCodeAt(0) % 5) * -0.08}s` } as React.CSSProperties}>
+export function Runner({ id, color = "#1763a6", goal, stopped, rest = false, dash = false }: { id: string; color?: string; goal: boolean; stopped: boolean; rest?: boolean; dash?: boolean }) {
+  return <svg className={`race-runner ${goal ? "is-goal" : ""} ${stopped ? "is-stopped" : ""} ${rest ? "is-resting" : ""} ${dash ? "is-dashing" : ""}`} viewBox={rest ? "-38 -44 76 68" : "-36 -68 72 102"} aria-hidden="true" style={{ color, "--runner-phase": `${(id.charCodeAt(0) % 5) * -0.08}s` } as React.CSSProperties}>
     {rest ? <g className="runner-rest"><ellipse className="runner-shadow" cx="-2" cy="0" rx="27" ry="2"/><path className="runner-rest-left-leg" d="M-14 -9 L-19 -4 L-33 -6"/><path className="runner-rest-right-leg" d="M-15 -9 L-24 -18 L-25 -7"/><path className="runner-rest-body runner-rest-torso" d="M-13 -9 L-1 -9 L7 -15"/><path className="runner-rest-right-arm" d="M4 -13 L-1 -16 L-13 -13"/><path className="runner-rest-left-arm" d="M4 -12 L9 -4 L16 -9 L19 -8"/><circle className="runner-rest-head runner-head" cx="16" cy="-24" r="12"/><text className="runner-rest-sleep" x="27" y="-37">💤</text></g> : dash && !goal ? <g className="runner-dash"><ellipse className="runner-shadow" cx="0" cy="29" rx="20" ry="2"/><g className="runner-dash-speed"><path d="M-33 -13 h10 M-35 -5 h12 M-32 3 h9"/></g><circle className="runner-dash-head runner-head" cx="11" cy="-43" r="15"/><path d="M6 -28 L-4 -8"/><path className="runner-dash-arm" d="M4 -24 L-11 -26 L-21 -17 M2 -22 L16 -15 L22 -20"/><path className="runner-dash-leg" d="M-4 -8 L-17 11 L-27 7 M-4 -8 L11 8 L25 24"/></g> : <>
     {!goal && <ellipse className="runner-shadow" cx="3" cy="28" rx="19" ry="2"/>}
     <g className="runner-body">
@@ -32,7 +32,7 @@ export function Runner({ id, goal, stopped, rest = false, dash = false }: { id: 
   </svg>;
 }
 
-export const HostRace = memo(function HostRace({ participants, mode, maxScore, active, pace, remainingText, interruptButton }: { participants: ParticipantState[]; mode: RaceMode; maxScore: number; active: boolean; pace: 0 | 1 | 2 | 3; remainingText: string; interruptButton: ReactNode }) {
+export const HostRace = memo(function HostRace({ roomId, participants, mode, maxScore, active, pace, remainingText, interruptButton }: { roomId: string; participants: ParticipantState[]; mode: RaceMode; maxScore: number; active: boolean; pace: 0 | 1 | 2 | 3; remainingText: string; interruptButton: ReactNode }) {
   const motionKey = "ionic-formula-competition:race-motion:v1";
   const previous = useRef<string[]>([]);
   const [motionChoice, setMotionChoice] = useState<RaceMotionChoice>("auto");
@@ -86,6 +86,7 @@ export const HostRace = memo(function HostRace({ participants, mode, maxScore, a
     document.addEventListener("visibilitychange", visibility);
     return () => document.removeEventListener("visibilitychange", visibility);
   }, []);
+  const colors = useMemo(() => new Map(participants.map((participant, index) => [participant.id, colorForRunner(roomId, participant.joinedOrder ?? index + 1)])), [roomId, participants]);
   const rows = useMemo(() => raceRows(participants, mode, previous.current, participants.length), [participants, mode]);
   useEffect(() => {
     previous.current = rows.map(row => row.id);
@@ -152,7 +153,7 @@ export const HostRace = memo(function HostRace({ participants, mode, maxScore, a
     const phase = `${mode === "deferred" ? "入力" : "正解"} ${row.count} / ${maxScore}`;
     return <div key={row.id} className="race-lane" style={{ height: laneHeight, transform: `translateY(${index * laneHeight}px)` }}>
       <div className="race-label" style={{ fontSize: `max(18px, ${24 * raceScale(row.rank)}px)` }}><strong>{row.rank}位</strong><span title={row.nickname}>{row.nickname}</span><small>{phase}{row.submitted && mode === "deferred" ? "・提出済み" : stopped && !goal && active ? "・解答終了" : ""}</small></div>
-      <div className="race-track"><div className="race-start"/><div className="race-goal"/><div className={`race-position ${dash && !light ? "is-accelerating" : ""}`} style={{ transform: `translateX(${progress * 100}%)` }}><div className="race-size" style={{ scale: raceScale(row.rank) }}>{goal && <span className="race-ground-shadow" aria-hidden="true"/>}<div className={`race-jump ${goal && !stopped && !light && !hidden ? "is-celebrating" : ""}`}><Runner id={row.id} goal={goal} rest={rest} dash={dash} stopped={stopped || light || hidden}/></div></div></div></div>
+      <div className="race-track"><div className="race-start"/><div className="race-goal"/><div className={`race-position ${dash && !light ? "is-accelerating" : ""}`} style={{ transform: `translateX(${progress * 100}%)` }}><div className="race-size" style={{ scale: raceScale(row.rank) }}>{goal && <span className="race-ground-shadow" aria-hidden="true"/>}<div className={`race-jump ${goal && !stopped && !light && !hidden ? "is-celebrating" : ""}`}><Runner id={row.id} color={colors.get(row.id)} goal={goal} rest={rest} dash={dash} stopped={stopped || light || hidden}/></div></div></div></div>
     </div>;
   };
   return <section className={`host-race race-pace-${pace} ${light ? "is-light" : ""} ${!mounted ? "is-initial" : ""}`} aria-label="参加者の進捗">

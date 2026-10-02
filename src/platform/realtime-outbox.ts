@@ -7,7 +7,7 @@ async function readRoom(db:PersistenceDatabase,publicId:string){
     FROM rooms r LEFT JOIN v2_room_manifests m ON m.room_id=r.id WHERE r.public_id=?`).bind(publicId).first<Record<string,any>>();
 }
 async function readParticipants(db:PersistenceDatabase,id:string){
-  return (await db.prepare(`SELECT p.id,p.nickname,p.status,p.current_ordinal,p.correct_count,p.resolved_question_count,p.revision,p.elapsed_cs,p.timing_source,
+  return (await db.prepare(`SELECT p.id,p.nickname,p.status,p.joined_order,p.current_ordinal,p.correct_count,p.resolved_question_count,p.revision,p.elapsed_cs,p.timing_source,
     COALESCE(v.answered_count,0) AS answered_count,v.finished_elapsed_ms,v.ready_generation
     FROM participants p LEFT JOIN v2_participant_progress v ON v.room_id=p.room_id AND v.participant_id=p.id
     WHERE p.room_id=? ORDER BY p.joined_order,p.id`).bind(id).all<Record<string,any>>()).results;
@@ -31,7 +31,7 @@ export async function queueRoomEvents(db:PersistenceDatabase,publicId:string,bef
     const event:any={eventId:crypto.randomUUID(),roomId:publicId,epoch:topic.epoch,revision:kind==='host'?topic.progress_revision:topic.control_revision,serverNow:now,roomRevision:room.revision};
     if(kind==='host'){
       const people=await readParticipants(db,room.id);
-      event.participants=people.filter(p=>p.status!=='REMOVED').map(p=>({id:p.id,nickname:p.nickname,status:p.status,currentOrdinal:p.current_ordinal,
+      event.participants=people.filter(p=>p.status!=='REMOVED').map(p=>({id:p.id,joinedOrder:p.joined_order,nickname:p.nickname,status:p.status,currentOrdinal:p.current_ordinal,
         correctCount:p.correct_count,resolvedQuestionCount:p.resolved_question_count,answeredCount:p.answered_count,revision:p.revision,elapsedCs:p.elapsed_cs,timingSource:p.timing_source,submitted:p.finished_elapsed_ms!=null}));
     }else{event.phase=room.manifest_state??room.state;event.startAtMs=room.start_at_ms;event.deadlineAtMs=room.deadline_at_ms;event.cutoffAtMs=room.cutoff_at_ms;event.collectionUntilMs=room.collection_until_ms;}
     await db.prepare(`INSERT INTO app_outbox(room_id,kind,revision,payload_json,event_id) VALUES(?,?,?,?,?)
