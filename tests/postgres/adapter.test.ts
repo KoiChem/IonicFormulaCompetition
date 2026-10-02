@@ -6,6 +6,14 @@ let pg: PGlite;
 beforeEach(async () => { pg = new PGlite(); });
 afterEach(async () => { await pg.close(); });
 describe('Postgres persistence compatibility', () => {
+  it('normalizes postgres.js bigint join orders without changing text identifiers', async () => {
+    const db = new PostgresDatabase(async () => ({ rows: [
+      { joined_order: '1', nickname: '123', id: '456' },
+      { joined_order: '2', nickname: '789', id: '012' },
+    ] }));
+    expect((await db.prepare('SELECT joined_order, nickname, id FROM participants').all()).results)
+      .toEqual([{ joined_order: 1, nickname: '123', id: '456' }, { joined_order: 2, nickname: '789', id: '012' }]);
+  });
   it('uses bound parameters without substituting quoted question marks', () => {
     expect(postgresQuery("SELECT '?' AS literal, ? AS value")).toBe("SELECT '?' AS literal, $1 AS value");
   });

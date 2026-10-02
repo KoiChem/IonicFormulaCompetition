@@ -45,7 +45,7 @@ function normalize(row: Record<string, unknown>) {
   // integer fields are all safe JS integers, validated at API boundaries.
   return Object.fromEntries(Object.entries(row).map(([key, value]) => [key,
     typeof value === 'bigint' ? Number(value) : typeof value === 'string' && /^(?:-?\d+)$/.test(value)
-      && /(?:_ms|_cs|count|revision|ordinal|generation|epoch|seq|rank|enabled|score)$/.test(key) ? Number(value) : value]));
+      && /(?:_ms|_cs|count|revision|ordinal|generation|epoch|seq|rank|enabled|score|joined_order)$/.test(key) ? Number(value) : value]));
 }
 
 class PostgresStatement implements PreparedSql {

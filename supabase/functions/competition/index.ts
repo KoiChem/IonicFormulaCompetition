@@ -48,7 +48,7 @@ function postgresQuery(input, values = []) {
 function normalize(row) {
   return Object.fromEntries(Object.entries(row).map(([key2, value]) => [
     key2,
-    typeof value === "bigint" ? Number(value) : typeof value === "string" && /^(?:-?\d+)$/.test(value) && /(?:_ms|_cs|count|revision|ordinal|generation|epoch|seq|rank|enabled|score)$/.test(key2) ? Number(value) : value
+    typeof value === "bigint" ? Number(value) : typeof value === "string" && /^(?:-?\d+)$/.test(value) && /(?:_ms|_cs|count|revision|ordinal|generation|epoch|seq|rank|enabled|score|joined_order)$/.test(key2) ? Number(value) : value
   ]));
 }
 var PostgresStatement = class _PostgresStatement {
