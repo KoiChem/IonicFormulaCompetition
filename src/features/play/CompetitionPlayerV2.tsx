@@ -503,7 +503,7 @@ export function CompetitionPlayerV2({ roomId, token }: { roomId: string; token: 
       })}</div><p className="submit-note">提出後は変更できません。</p>
       <button className="primary-action" type="button" disabled={!canEdit} onClick={submit}>提出する</button>
     </section></main>;
-  return <main className="play-shell play-active" data-tick={tick}>
+  return <main className="play-shell play-active play-answering" data-tick={tick}>
     <header className="scorebar"><span>第{question.ordinal + 1}問 / 全{session.questions.length}問</span><span>{session.gradingMode === "immediate" ? `正解 ${localCorrect} / ${room.maxScore}` : `入力済み ${filledFields} / ${totalFields}`}</span><span>残り {String(Math.floor(remaining / 60)).padStart(2, "0")}:{String(remaining % 60).padStart(2, "0")}</span></header>
     {syncPanel}<ImmediateVerdict verdict={verdict}/>
     <QuestionView question={publicCurrent}/>

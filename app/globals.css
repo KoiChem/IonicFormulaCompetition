@@ -51,13 +51,13 @@ legend { margin-bottom: 10px; font-weight: 800; }
   background:linear-gradient(rgba(93,169,142,.12) 1px,transparent 1px) 0 0/22px 22px,linear-gradient(90deg,rgba(93,169,142,.12) 1px,transparent 1px) 0 0/22px 22px,var(--play-bg);
 }
 .play-active > * { width:100%; min-width:0; flex:0 0 auto; }
-/* Keep vertical drags on answer controls out of page scrolling, including key gaps.
+/* Keep vertical drags on controls while answering out of page scrolling, including key gaps.
    Horizontal caret gestures, vertical key flicks, and pinch zoom remain available. */
-.play-active button,
-.play-active .formula-keyboard,
-.play-active .name-shortcuts,
-.play-active .formula-composer,
-.play-active .name-composer { touch-action:pan-x pinch-zoom; }
+.play-answering button,
+.play-answering .formula-keyboard,
+.play-answering .name-shortcuts,
+.play-answering .formula-composer,
+.play-answering .name-composer { touch-action:pan-x pinch-zoom; }
 .play-active .scorebar { position:static; display:grid; grid-template-columns:auto auto 1fr auto; align-items:center; min-height:50px; gap:5px 10px; padding:7px 11px; border-radius:15px; background:#0d4038; font-variant-numeric:tabular-nums; font-size:clamp(.73rem,3.4vw,.9rem); }
 .play-active .scorebar > span:nth-child(3) { text-align:right; }.play-active .scorebar small { font-size:.72em; }
 .sound-level-button { min-height:34px; padding:4px 8px; border:1px solid rgba(255,255,255,.65); border-radius:9px; background:transparent; color:white; font-size:.78rem; white-space:nowrap; }

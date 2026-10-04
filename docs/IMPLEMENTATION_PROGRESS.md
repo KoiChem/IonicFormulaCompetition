@@ -76,3 +76,10 @@ Plan: docs/superpowers/plans/2026-10-01-github-supabase.md
 - Production build and TypeScript pass. Local suite: 86 files / 478 tests pass, 2 load files / 3 tests skipped; the Pages workflow runs its existing full RUN_LOAD=1 suite.
 - Playwright/Chromium with actual FormulaKeyboard and NameKeyboard components: 22 checks across 11 control/key-gap locations in both vertical directions showed zero page scroll. Verified case flick, horizontal caret swipe, name input/shortcut, and touch button activation; blank area scrolled 121px. No page errors. Fixture setup React-module mismatch was corrected without product changes.
 - Physical iPhone/iPad Safari, native text-selection handles, and OS keyboard behavior remain unverified.
+
+## 2026-10-04: Restore review-list scrolling
+
+- Limited the answer-control gesture policy to `.play-answering`, present only on normal/retry answer surfaces in both player implementations. Immediate/deferred review screens retain `.play-active` styling but do not receive the suppression policy.
+- Verified the original failure before editing: vertical touch drag from an immediate-review retry button moved the page 0px.
+- Production-build Playwright tests with synthetic room APIs verify both review modes: all 10 review buttons scroll in both directions (about 100px), selecting a question suppresses scrolling from the answer input/action buttons (0px), and returning to review restores scrolling. Formula controls/key gaps also stay at 0px; case/bracket flicks and horizontal caret gestures pass. No page errors in production-build checks. Development HMR produced duplicate-root errors, so release validation used the production preview.
+- TypeScript/build and RUN_LOAD=1 suite pass: 88 files, 481 tests. Physical iPhone/iPad Safari and native text-selection behavior remain unverified.
