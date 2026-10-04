@@ -68,3 +68,11 @@ Plan: docs/superpowers/plans/2026-10-01-github-supabase.md
 - Validation: six new regression cases verified failing then passing; all 88 files / 481 tests pass with RUN_LOAD=1. TypeScript/build and git diff checks pass. Read-only reviewer found no actionable issues.
 - Local Playwright with synthetic room state/manifest/ack responses verified the exact pass → early review → retry → correct → resume scenario, card/footer resumption, draft retention, stale-ordinal restoration, and the no-continuation state after every question is visited. Computed colors distinguish correct and unanswered fields. Controlled QR camera frames verify automatic nickname routing and stream shutdown. QR button stays left of input without overflow at 320/390/768/1280px. Console errors: zero.
 - Physical-device camera/Safari checks and a live classroom competition are not claimed by these synthetic browser tests.
+
+## 2026-10-04: Answer control touch scrolling
+
+- Scoped `touch-action: pan-x pinch-zoom` to buttons, formula keyboard, name shortcuts, and formula/name composers inside `.play-active`. Keyboard gaps are covered by their containers. Removed narrower redundant key rules and the conflicting `manipulation` rule.
+- Page scrolling from question text/blank areas remains available. Existing pointer/touch input handlers are unchanged; horizontal caret gestures, vertical case/bracket flicks, and pinch zoom remain permitted by the gesture policy.
+- Production build and TypeScript pass. Local suite: 86 files / 478 tests pass, 2 load files / 3 tests skipped; the Pages workflow runs its existing full RUN_LOAD=1 suite.
+- Playwright/Chromium with actual FormulaKeyboard and NameKeyboard components: 22 checks across 11 control/key-gap locations in both vertical directions showed zero page scroll. Verified case flick, horizontal caret swipe, name input/shortcut, and touch button activation; blank area scrolled 121px. No page errors. Fixture setup React-module mismatch was corrected without product changes.
+- Physical iPhone/iPad Safari, native text-selection handles, and OS keyboard behavior remain unverified.

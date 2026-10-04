@@ -51,6 +51,13 @@ legend { margin-bottom: 10px; font-weight: 800; }
   background:linear-gradient(rgba(93,169,142,.12) 1px,transparent 1px) 0 0/22px 22px,linear-gradient(90deg,rgba(93,169,142,.12) 1px,transparent 1px) 0 0/22px 22px,var(--play-bg);
 }
 .play-active > * { width:100%; min-width:0; flex:0 0 auto; }
+/* Keep vertical drags on answer controls out of page scrolling, including key gaps.
+   Horizontal caret gestures, vertical key flicks, and pinch zoom remain available. */
+.play-active button,
+.play-active .formula-keyboard,
+.play-active .name-shortcuts,
+.play-active .formula-composer,
+.play-active .name-composer { touch-action:pan-x pinch-zoom; }
 .play-active .scorebar { position:static; display:grid; grid-template-columns:auto auto 1fr auto; align-items:center; min-height:50px; gap:5px 10px; padding:7px 11px; border-radius:15px; background:#0d4038; font-variant-numeric:tabular-nums; font-size:clamp(.73rem,3.4vw,.9rem); }
 .play-active .scorebar > span:nth-child(3) { text-align:right; }.play-active .scorebar small { font-size:.72em; }
 .sound-level-button { min-height:34px; padding:4px 8px; border:1px solid rgba(255,255,255,.65); border-radius:9px; background:transparent; color:white; font-size:.78rem; white-space:nowrap; }
@@ -85,7 +92,7 @@ legend { margin-bottom: 10px; font-weight: 800; }
 .play-active .formula-keyboard .answer-submit { border-color:#b6d9cf; background:#eaf7f2; color:var(--play-dark); }
 .play-active .formula-keyboard { width:calc(100% + 18px); min-width:0; margin:0 -9px; padding:6px 3px; border-radius:16px; background:rgba(231,245,238,.94); box-shadow:0 8px 22px rgba(61,122,103,.08); user-select:none; }
 .play-active .formula-keyboard .key-row { display:grid; gap:3px; margin:3px auto; }.play-active .number-keys,.play-active .letter-keys .key-row:first-child { grid-template-columns:repeat(10,minmax(0,1fr)); }.play-active .letter-keys .key-row:nth-child(2) { width:90%; grid-template-columns:repeat(9,minmax(0,1fr)); }.play-active .letter-keys .key-row:last-child { width:100%; grid-template-columns:40px repeat(7,minmax(0,1fr)) 40px; }
-.play-active .formula-keyboard button,.play-active .name-shortcuts button { min-width:0; min-height:42px; padding:0; border:1px solid #d1e0db; border-radius:8px; background:white; color:var(--play-ink); font-size:.85rem; font-weight:800; box-shadow:0 2px 0 #bfd1cb; touch-action:manipulation; }.play-active .letter-keys button { touch-action:pan-x pinch-zoom; }.play-active .formula-keyboard button:active,.play-active .name-shortcuts button:active { transform:translateY(2px); box-shadow:none; }.play-active .formula-keyboard button.is-case-flick-ready { border-color:#73bca7; background:#dff4ea; color:var(--play-dark); transform:translateY(-1px); box-shadow:0 3px 0 #a7d6c5; }.play-active .letter-keys button[aria-pressed="true"] { border-color:#a7d6c5; background:#ccefe0; color:var(--play-dark); }
+.play-active .formula-keyboard button,.play-active .name-shortcuts button { min-width:0; min-height:42px; padding:0; border:1px solid #d1e0db; border-radius:8px; background:white; color:var(--play-ink); font-size:.85rem; font-weight:800; box-shadow:0 2px 0 #bfd1cb; }.play-active .formula-keyboard button:active,.play-active .name-shortcuts button:active { transform:translateY(2px); box-shadow:none; }.play-active .formula-keyboard button.is-case-flick-ready { border-color:#73bca7; background:#dff4ea; color:var(--play-dark); transform:translateY(-1px); box-shadow:0 3px 0 #a7d6c5; }.play-active .letter-keys button[aria-pressed="true"] { border-color:#a7d6c5; background:#ccefe0; color:var(--play-dark); }
 .play-active .keyboard-controls { display:grid; grid-template-columns:1fr 1fr 1.3fr; gap:3px; margin-top:5px; }.play-active .ion-entry .keyboard-controls { grid-template-columns:repeat(9,minmax(0,1fr)) minmax(0,1.35fr); }.play-active .ion-entry .keyboard-controls button:nth-child(-n+7) { border-color:#a8d8cb; background:#e2f7f1; color:#197b6d; }.play-active .ion-entry .keyboard-controls button { font-size:.72rem; }
 .play-active .name-shortcuts { display:grid; gap:4px; margin-top:7px; }.play-active .name-shortcuts.compound-name-entry { grid-template-columns: repeat(5,minmax(0,1fr)) minmax(52px,1.35fr); }.play-active .name-shortcuts.ion-name-entry { grid-template-columns: repeat(4,minmax(0,1fr)) minmax(53px,1.35fr) minmax(40px,1fr) minmax(48px,1.2fr); }.play-active .name-shortcuts button { min-height:44px; white-space:nowrap; }
 .play-active .pass-action { width:100%; min-height:44px; margin-top:9px; padding:0 12px; border:1px solid #bdd8cf; border-radius:12px; background:rgba(255,255,255,.88); color:var(--play-muted); }
@@ -346,7 +353,6 @@ legend { margin-bottom: 10px; font-weight: 800; }
 .complex-toggle-state { margin-left:6px; font-size:.72em; }
 .play-active .name-shortcuts.complex-name-shortcuts { grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
 .play-active .complex-name-shortcuts button { padding-inline:2px; font-size:clamp(.65rem,2.7vw,.85rem); }
-.play-active .number-keys button { touch-action:pan-x pinch-zoom; }
 
 /* Keep class creation within a landscape viewport while preserving touch targets. */
 @media (min-width: 900px) {
