@@ -44,3 +44,14 @@ nav { display: grid; gap: 12px; margin-top: 28px; }
 .secondary-link[role="status"] { min-height:48px; display:inline-grid; place-items:center; border-radius:12px; color: var(--muted); }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #c38e4d; outline-offset: 3px; }
 @media (max-width: 420px) { .join-row { flex-direction: column; } }
+
+.join-entry { display: flex; gap: 8px; flex: 1; min-width: 0; }
+.join-entry input { width: 0; }
+.qr-button { flex: 0 0 48px; padding: 10px; background: var(--paper); color: var(--primary-dark); border: 2px solid var(--line); }
+.qr-button svg { width: 24px; height: 24px; }
+.qr-notice { font-size: .9rem; }
+.qr-scanner { width: min(92vw, 480px); max-height: 90dvh; overflow: auto; border: 1px solid var(--line); border-radius: 20px; padding: 24px; color: var(--ink); background: var(--paper); }
+.qr-scanner::backdrop { background: rgba(0, 0, 0, .5); }
+.qr-scanner h2 { margin-top: 0; font-size: 1.25rem; }
+.qr-scanner video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #111; border-radius: 12px; }
+.qr-scanner > button { margin-top: 16px; width: 100%; }

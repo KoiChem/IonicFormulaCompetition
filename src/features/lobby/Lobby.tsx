@@ -1,4 +1,4 @@
-import { appPath } from '../../web/routing';
+import { joinQrPath } from "../setup/join-qr";
 "use client";
 import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
@@ -9,8 +9,8 @@ import { primeAudio, savedSoundLevel } from "../play/audio-feedback";
 import { LobbyName } from "./LobbyName";
 
 export function Lobby({ room, participants = [], joinCode, canStart, onStart, onRemove, ownerParticipantId, busy }: { room: RoomView; participants?: ParticipantState[]; joinCode?: string; canStart: boolean; onStart?(): void; onRemove?(participant: ParticipantState): void; ownerParticipantId?: string; busy?: boolean }) {
-  const [joinUrl, setJoinUrl] = useState(appPath(`/join/${room.id}`));
-  useEffect(() => setJoinUrl(`${location.origin}${appPath(`/join/${room.id}`)}`), [room.id]);
+  const [joinUrl, setJoinUrl] = useState(joinQrPath(room.id, joinCode ?? ""));
+  useEffect(() => setJoinUrl(`${location.origin}${joinQrPath(room.id, joinCode ?? "")}`), [room.id, joinCode]);
   const settings = room.settings as IonicFormulaGameSettings;
   return <section className={`panel lobby-panel ${room.kind === "class" ? "class-lobby" : "mate-lobby"}`} aria-label="競技への招待と参加者一覧">
     {joinCode ? <div className="join-share"><div className="code"><span>参加コード</span><strong>{joinCode}</strong></div><QRCodeSVG value={joinUrl} size={420} level="M" marginSize={2} role="img" aria-label={`参加用QRコード ${joinUrl}`} /><a href={joinUrl}>{joinUrl}</a></div> : null}

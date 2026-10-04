@@ -47,3 +47,13 @@ Plan: docs/superpowers/plans/2026-10-01-github-supabase.md
 - Fresh real anonymous two-browser public 3-minute deadline competition (8237d3f6-abc7-4408-a367-619936d9f6ec) completed with both finish acknowledgements confirmed, no finalSyncUnconfirmed, complete own unanswered results, zero API failures during the whole round, and no overflow at390/1024px. This verifies the observed deadline notification failure is resolved with the new timing client/API.
 - Google Auth public /auth/v1/settings still reports external.google=false; anonymous_users=true. Real Google teacher login and full live classroom flow remain blocked on OAuth setup. Mac re-unlock is no longer needed for the current fix verification; old numeric diagnostic logs were not read.
 - Owned localhost mock API/Vite servers stopped. Actual physical devices,42 distinct student clients, five simultaneous classes and the school's shared network remain unverified.
+
+
+## 2026-10-04: Home camera QR participation
+
+- Added a 48px camera button left of the home participation-code input at desktop and mobile widths. A modal camera preview uses video only, prefers the rear camera, and loads jsQR on demand. Frames are decoded locally; no images are uploaded.
+- Teacher QR invitations keep the existing direct nickname route and now carry a code query. The home scanner fills the code and waits for the student to press Join. Existing code-free QR invitations continue directly to nickname entry. Unrelated origins/application paths and malformed/duplicate codes are rejected.
+- Camera streams stop on successful decoding, close/Escape, backgrounding, and late permission resolution after close. Denied/missing/unavailable camera errors offer manual entry; input values are preserved.
+- Validation: new parser tests verified failing then passing; 88 files / 475 tests pass with RUN_LOAD=1. TypeScript and production build pass (existing large bundle warning remains). Read-only reviewer found no actionable bugs.
+- Local Playwright: actual generated QR pixels decoded through a canvas MediaStream; current code reflection then Join reaches nickname entry, legacy QR reaches nickname entry, unrelated QR rejected. Join-info responses for these synthetic room IDs were stubbed. Verified denial, close, Escape, late camera permission, focus return, no overflow and left placement at 320/390/768/1280px, and zero console errors/API network failures.
+- Physical iPhone/iPad camera access, optical QR recognition, and Safari behavior have not been tested. Browser camera inputs above are controlled MediaStreams, not physical-camera evidence.
