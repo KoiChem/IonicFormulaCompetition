@@ -21,3 +21,11 @@ export function immediateReviewState(questions: readonly (InternalQuestion | Pub
   while (frontier < questions.length && questions[frontier].fields.every(field => ["correct", "passed", "passedRetry"].includes(fields[`${questions[frontier].id}:${field.id}`] ?? ""))) frontier += 1;
   return { fields, frontier, correctCount: Object.values(fields).filter(state => state === "correct").length };
 }
+
+// The normal continuation is independent of the question temporarily opened for review.
+export function immediateResumeTarget(questions: readonly (InternalQuestion | PublicQuestion)[], operations: readonly V2Operation[]) {
+  const progress = immediateReviewState(questions, operations);
+  const question = questions[progress.frontier];
+  const field = question?.fields.find(item => !['correct', 'passed', 'passedRetry'].includes(progress.fields[`${question.id}:${item.id}`] ?? ''));
+  return question && field ? { ordinal: progress.frontier, fieldId: field.id } : null;
+}

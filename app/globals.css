@@ -462,3 +462,9 @@ legend { margin-bottom: 10px; font-weight: 800; }
 .teacher-workspace button:disabled { opacity:.5; cursor:not-allowed; }
 @media (max-width:899px) { .teacher-workspace-header { align-items:start; flex-direction:column; gap:14px; }.teacher-workspace-navigation { justify-items:start; }.teacher-management-grid { grid-template-columns:1fr; }.teacher-roster { max-height:280px; } }
 @media (max-width:480px) { .teacher-admin-card { padding:14px; }.teacher-count-badge { white-space:normal; }.teacher-card-foot { align-items:stretch; flex-direction:column; }.teacher-open-action { justify-content:space-between; }.teacher-view-switch button { padding-inline:12px; } }
+
+/* Immediate review states: keep unfinished answers distinct from correct answers. */
+.immediate-review-fields > .is-pending { background:#fff0d6; border:1px solid #c27a24; color:#804600; }
+.immediate-review-fields > .is-correct { background:#e1f4e9; color:var(--play-dark); }
+.immediate-review-card > .review-continue { margin-top:10px; width:100%; text-align:center; border-color:var(--play-primary); background:var(--play-primary); color:white; }
+.immediate-review-card > .review-continue:disabled { opacity:.55; cursor:default; }

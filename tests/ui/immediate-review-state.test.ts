@@ -24,3 +24,23 @@ describe("immediate review state", () => {
     expect(state.fields["q0:name"]).toBe("correct");
   });
 });
+
+describe("normal question resumption after reviewing passed answers", () => {
+  it("resumes at the next normal question after a passed answer is solved", async () => {
+    const { immediateResumeTarget } = await import('../../src/features/play/immediate-review-state');
+    expect(immediateResumeTarget(questions, [op(1, 'pass', 'q0'), op(2, 'answer', 'q1', 'ナトリウムイオン'), op(3, 'answer', 'q0', 'ナトリウムイオン')])).toEqual({ ordinal: 2, fieldId: 'name' });
+  });
+  it("resumes an incorrect current answer before later unstarted questions", async () => {
+    const { immediateResumeTarget } = await import('../../src/features/play/immediate-review-state');
+    expect(immediateResumeTarget(questions, [op(1, 'pass', 'q0'), op(2, 'answer', 'q1', '違う')])).toEqual({ ordinal: 1, fieldId: 'name' });
+  });
+  it("has no normal continuation after every question is resolved or passed", async () => {
+    const { immediateResumeTarget } = await import('../../src/features/play/immediate-review-state');
+    expect(immediateResumeTarget(questions, [op(1, 'pass', 'q0'), op(2, 'pass', 'q1'), op(3, 'pass', 'q2')])).toBeNull();
+  });
+  it("resumes the unresolved field of a two-field question", async () => {
+    const { immediateResumeTarget } = await import('../../src/features/play/immediate-review-state');
+    const both: InternalQuestion = { ...questions[0], variant: 'both', fields: [{ id: 'formula', type: 'formula' }, { id: 'name', type: 'name' }], answer: { type: 'both', formula: { type: 'formula', canonical: 'NaCl', accepted: [] }, name: { type: 'name', canonical: '塩化ナトリウム', accepted: [] } } };
+    expect(immediateResumeTarget([both], [{ ...op(1, 'pass', 'q0'), fieldId: 'formula' }])).toEqual({ ordinal: 0, fieldId: 'name' });
+  });
+});

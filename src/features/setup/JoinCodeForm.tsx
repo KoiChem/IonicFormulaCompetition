@@ -10,11 +10,10 @@ export function JoinCodeForm() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [notice, setNotice] = useState("");
   const closeScanner = useCallback(() => setScanning(false), []);
   const readQr = useCallback((target: JoinQrTarget) => {
     setScanning(false); setError("");
-    if ('code' in target) { setCode(target.code); setNotice("参加コードを読み取りました。「参加する」を押してください。"); }
+    if ('code' in target) window.location.assign(appPath(`/join?code=${encodeURIComponent(target.code)}`));
     else window.location.assign(appPath(`/join/${encodeURIComponent(target.roomId)}`));
   }, []);
   return <form className="join-form" onSubmit={event => {
@@ -23,8 +22,7 @@ export function JoinCodeForm() {
     window.location.assign(appPath(`/join?code=${encodeURIComponent(normalizeJoinCode(code))}`));
   }}>
     <label htmlFor="code">参加コード</label>
-    <div className="join-row"><div className="join-entry"><button type="button" className="qr-button" aria-label="カメラで参加用QRコードを読み取る" title="QRコードを読み取る" onClick={() => { setNotice(""); setScanning(true); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5l2-2h4l2 2h4v15H4V5h4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.8"/></svg></button><input id="code" name="code" inputMode="text" autoComplete="off" value={code} onChange={event => { setCode(event.target.value); setError(""); setNotice(""); }} required /></div><button type="submit">参加する</button></div>
-    {notice && <p role="status" className="qr-notice">{notice}</p>}
+    <div className="join-row"><div className="join-entry"><button type="button" className="qr-button" aria-label="参加用QRコードを読み取る" title="QRコードを読み取る" onClick={() => { setScanning(true); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 2H2v5M17 2h5v5M22 17v5h-5M7 22H2v-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/><path fill="currentColor" fillRule="evenodd" d="M5 5h6v6H5V5Zm2 2v2h2V7H7Zm6-2h6v6h-6V5Zm2 2v2h2V7h-2ZM5 13h6v6H5v-6Zm2 2v2h2v-2H7Z"/><path fill="currentColor" d="M13 13h2v2h-2zm4 0h2v2h-2zm-2 2h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2z"/></svg></button><input id="code" name="code" inputMode="text" autoComplete="off" value={code} onChange={event => { setCode(event.target.value); setError(""); }} required /></div><button type="submit">参加する</button></div>
     {scanning && <JoinQrScanner onRead={readQr} onClose={closeScanner} />}
     {error && <p role="alert" className="error">{error}</p>}
   </form>;

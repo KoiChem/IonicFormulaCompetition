@@ -27,3 +27,16 @@ describe("immediate review cards", () => {
     expect(html).toContain("再挑戦中");
   });
 });
+
+describe('normal continuation from the review list', () => {
+  it('offers continuation only at the current frontier and preserves future concealment', () => {
+    const html = renderToStaticMarkup(createElement(ImmediateReviewList, { questions: [question('q0', 0, '過去'), question('q1', 1, '続き'), question('q2', 2, '未来')], frontier: 1, fields: { 'q0:formula': 'correct', 'q0:name': 'correct' }, disabled: false, onRetry: () => undefined, onContinue: () => undefined }));
+    expect(html.match(/この問題を解く/g)).toHaveLength(1);
+    expect(html).toContain('第2問の解答に進む');
+    expect(html).not.toContain('未来');
+  });
+  it('disables continuation when answering is unavailable', () => {
+    const html = renderToStaticMarkup(createElement(ImmediateReviewList, { questions: [question('q0', 0, '問題')], frontier: 0, fields: {}, disabled: true, onRetry: () => undefined, onContinue: () => undefined }));
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>この問題を解く<\/button>/);
+  });
+});

@@ -49,7 +49,6 @@ input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid 
 .join-entry input { width: 0; }
 .qr-button { flex: 0 0 48px; padding: 10px; background: var(--paper); color: var(--primary-dark); border: 2px solid var(--line); }
 .qr-button svg { width: 24px; height: 24px; }
-.qr-notice { font-size: .9rem; }
 .qr-scanner { width: min(92vw, 480px); max-height: 90dvh; overflow: auto; border: 1px solid var(--line); border-radius: 20px; padding: 24px; color: var(--ink); background: var(--paper); }
 .qr-scanner::backdrop { background: rgba(0, 0, 0, .5); }
 .qr-scanner h2 { margin-top: 0; font-size: 1.25rem; }

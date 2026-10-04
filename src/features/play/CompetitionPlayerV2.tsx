@@ -23,7 +23,7 @@ import { settingsSummary } from "../setup/CompetitionSettingsForm";
 import type { IonicFormulaGameSettings } from "../../games/ionic-formula/shared/types";
 import { playAnswerSound, primeAudio, savedSoundLevel } from "./audio-feedback";
 import { DeferredReviewQuestion } from "./DeferredReviewQuestion";
-import { immediateReviewState } from "./immediate-review-state";
+import { immediateReviewState, immediateResumeTarget } from "./immediate-review-state";
 import { ImmediateReviewList } from "./ImmediateReviewList";
 
 const fieldKey = (questionId: string, fieldId: string) => `${questionId}:${fieldId}`;
@@ -183,10 +183,19 @@ export function CompetitionPlayerV2({ roomId, token }: { roomId: string; token: 
         const stored = await readV2Local(localKey).catch(() => { throw new Error("保存した解答を読み込めませんでした"); });
         if (stored && (!isRestorableV2Local(stored, manifest.manifestId, manifest.evaluatorVersion, manifest.questions.map(question => question.id)) || stored.gradingMode !== manifest.gradingMode)) throw new Error("保存した解答を読み込めませんでした");
         if (!stored && data.room.state !== "PREPARING") throw new Error("保存した解答が見つかりませんでした");
-        const next: V2LocalRecord = stored ? { ...stored, preparationGeneration: manifest.preparationGeneration, expiresAtMs: data.room.expiresAtMs } : {
+        let next: V2LocalRecord = stored ? { ...stored, preparationGeneration: manifest.preparationGeneration, expiresAtMs: data.room.expiresAtMs } : {
           manifestId: manifest.manifestId, preparationGeneration: manifest.preparationGeneration, evaluatorVersion: manifest.evaluatorVersion, gradingMode: manifest.gradingMode,
           questions: manifest.questions, writerEpoch: 1, ackSeq: 0, operations: [], ordinal: 0, drafts: {}, finished: false, expiresAtMs: data.room.expiresAtMs,
         };
+        if (next.gradingMode === "immediate" && !next.finished) {
+          const progress = immediateReviewState(next.questions, next.operations);
+          const activeReview = next.reviewTarget && progress.fields[fieldKey(next.reviewTarget.questionId, next.reviewTarget.fieldId)] !== "correct";
+          if (!activeReview) {
+            const resume = immediateResumeTarget(next.questions, next.operations);
+            next = { ...next, reviewTarget: undefined, ...(resume ? { ordinal: resume.ordinal } : {}) };
+            if (resume) setSelectedField(resume.fieldId);
+          }
+        }
         try { persistChain.current = writeV2Local(localKey, next); await persistChain.current; } catch { throw new Error("保存した解答を読み込めませんでした"); }
         sessionRef.current = next; setSession({ ...next }); setRestoreFailed(false);
         if (next.reviewTarget) setSelectedField(next.reviewTarget.fieldId);
@@ -430,7 +439,11 @@ export function CompetitionPlayerV2({ roomId, token }: { roomId: string; token: 
         if (nextState?.correctCount === total) {
           queue({ type: "finish", elapsedMs: elapsedMs(), reason: "completed" }, true);
           persist({ ...sessionRef.current!, finished: true });
-        } else if (reviewTarget) { persist({ ...current, reviewTarget: undefined }); setReviewing(true); }
+        } else if (reviewTarget) {
+          const resume = immediateResumeTarget(current.questions, current.operations);
+          persist({ ...current, reviewTarget: undefined, ...(resume ? { ordinal: resume.ordinal } : {}) });
+          setReviewing(true);
+        }
         else if (nextState && question.fields.every(item => ["correct", "passed", "passedRetry"].includes(nextState.fields[fieldKey(question.id, item.id)] ?? ""))) {
           if (nextState.frontier >= current.questions.length) setReviewing(true);
           else persist({ ...current, ordinal: nextState.frontier });
@@ -460,17 +473,26 @@ export function CompetitionPlayerV2({ roomId, token }: { roomId: string; token: 
   };
   const remaining = remainingSeconds(cutoffAtMs ?? now, now);
   const canEdit = remaining > 0 && !needsReview && hasWriteLock && wallClock.current !== null;
+  const resumeTarget = immediate ? immediateResumeTarget(session.questions, session.operations) : null;
+  const resumeAnswer = () => {
+    const current = sessionRef.current;
+    if (!canEdit || !current) return;
+    const target = immediateResumeTarget(current.questions, current.operations);
+    if (!target) return;
+    setSelectedField(target.fieldId); setReviewing(false); setConfirmSubmitting(false); setVerdict(null);
+    persist({ ...current, ordinal: target.ordinal, reviewTarget: undefined });
+  };
   const localCorrect = session.gradingMode === "immediate" ? immediateScore(session.questions, session.operations) : 0;
   const totalFields = session.questions.reduce((count, item) => count + item.fields.length, 0);
   const filledFields = session.questions.reduce((count, item) => count + item.fields.filter(f => !emptyValue(session.drafts[fieldKey(item.id, f.id)]?.value)).length, 0);
   if (reviewing && session.gradingMode === "immediate" && immediate) return <main className="play-shell play-active" data-tick={tick}>
     <header className="scorebar"><span>全解答確認</span><span>正解 {immediate.correctCount} / {room.maxScore}</span><span>残り {String(Math.floor(remaining / 60)).padStart(2, "0")}:{String(remaining % 60).padStart(2, "0")}</span></header>
     {syncPanel}<ImmediateVerdict verdict={verdict}/><section className="panel"><h1>全解答確認</h1><p>パスした問題は、時間内なら後から解答できます。</p>
-      <ImmediateReviewList questions={session.questions} frontier={immediate.frontier} fields={immediate.fields} disabled={!canEdit} onRetry={(index, fieldId) => {
+      <ImmediateReviewList questions={session.questions} frontier={immediate.frontier} fields={immediate.fields} disabled={!canEdit} onContinue={resumeAnswer} onRetry={(index, fieldId) => {
         setSelectedField(fieldId); setReviewing(false); setConfirmSubmitting(false); setVerdict(null);
         persist({ ...sessionRef.current!, ordinal: index, reviewTarget: { questionId: session.questions[index].id, fieldId } });
       }}/>
-      <button className="secondary-button" type="button" disabled={!canEdit || session.ordinal < immediate.frontier && !session.reviewTarget || session.ordinal >= immediate.frontier && question.fields.every(item => ["correct", "passed", "passedRetry"].includes(immediate.fields[fieldKey(question.id, item.id)] ?? ""))} onClick={() => { setReviewing(false); setConfirmSubmitting(false); }}>解答に戻る</button>
+      <button className="secondary-button" type="button" disabled={!canEdit || !resumeTarget} onClick={resumeAnswer}>{resumeTarget ? `続きの問題へ（第${resumeTarget.ordinal + 1}問）` : "続きの問題はありません"}</button>
       {confirmSubmitting ? <div className="immediate-submit-confirm" role="alertdialog" aria-label="提出の最終確認"><p>正解 {immediate.correctCount} / {totalFields}、未正解 {totalFields - immediate.correctCount}。提出後は解答に戻れません。</p><div><button type="button" onClick={() => setConfirmSubmitting(false)}>取り消す</button><button type="button" disabled={!canEdit || storageFailed || localSaving} onClick={submit}>提出を確定する</button></div></div> : <button className="primary-action" type="button" disabled={!canEdit || storageFailed || localSaving} onClick={() => setConfirmSubmitting(true)}>このまま提出</button>}
     </section></main>;
   if (reviewing && session.gradingMode === "deferred") return <main className="play-shell play-active" data-tick={tick}>
