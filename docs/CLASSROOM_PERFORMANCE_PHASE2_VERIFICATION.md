@@ -43,7 +43,10 @@ PostgreSQL17、postgres.js、localhost、ssl=false。固定Auth fixtureに200ms�
 - 後方互換の追加migration `202610050001`。dry-runで以前から未反映だった `202610040001_shared_teacher_authority.sql` も検出し、既存テーブルが未作成であることを照合して両方適用。既存room/participant/receipt/outboxをリセットしない。
 - Supabase competition **version21 ACTIVE**、verify_jwt=false。専用保守secretはEdge/Vaultのみ。Cron毎分の実呼出HTTP200、last_success更新を確認。保守認証はブラウザーに公開しない。
 - 旧Pages `index-CmJ0yOts.js` と新Edgeの実Auth/実Realtime/APIで2人mate参加→開始→第1問→提出→両者最終結果、390×844横はみ出しなしを確認。
-- Pages公開と新UIの動作検証は続いて記録する。
+- 実装commit `dd25bc841d9788b7ae8efb6889dae02cf937efb6` をpush。Pages [Actions 37307524370](https://github.com/KoiChem/IonicFormulaCompetition/actions/runs/37307524370) のbuild/deploy両方成功。
+- 公開JS `index-BFCAjfiW.js` SHA256 `c9fa6628cfc10d18d1447f27377627490af444397f15397a8984c3331a7e3b13`、CSS `index-B0HBjL6V.css` SHA256 `453e6d60762974423998f9993eafae32b82b02bec2a7c159676cee3bdb8f7de1`。HTTP200でローカルbuildと一致。
+- 新UI/実Auth/実Realtime/APIの2人mateで参加→開始→第1問→提出→両者最終結果を確認。開始POST応答874ms、開始クリックから第1問表示はhost8.862秒/参加者9.368秒。既定5秒カウントダウンを単純に引くと3.862秒/4.368秒（端末保存・時計・描画・ネットワークを含む単発確認で、classroom30回p95ではない）。POST1回/status1回、画面例外/console error/通信失敗/HTTPエラーゼロ。390×844で参加・解答・結果の横はみ出しなし。
+- 両者のFINISHED stateが200でrequest-idを持つこと、専用キーなしのmaintenanceが403になることを確認。Cron直近3回がHTTP200/timeoutなし、本番outbox pending0を観測。
 
 本番DBのmax_connections60、保守と少人数確認中client backend11を観測。3接続/isolateの全てが常時使われるわけではなく、1秒idleで解放する。isolate数/プロジェクト共有poolerの最大負荷と、本番20/42台の学校回線は未測定。大人数試験は使い捨てDBのみに実施した。
 

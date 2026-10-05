@@ -21,28 +21,30 @@
 
 ### Task 1: Auth errors and request metrics
 Files: supabase-identity.ts、supabase-gateway.ts、web/api.ts、identity/API tests。
-- [ ] Auth5xx/429/不正JSONの回帰をRED→GREEN。401時refreshはsingle-flight、503で資格維持、POST再送なし。
-- [ ] 成功ログの標本抽出とquota/retry計測を追加し、秘密値を含めないテスト。
+- [x] Auth5xx/429/不正JSONの回帰をRED→GREEN。401時refreshはsingle-flight、503で資格維持、POST再送なし。
+- [x] 成功ログの標本抽出とquota/retry計測を追加し、秘密値を含めないテスト。
 
 ### Task 2: Snapshot routes and compact readiness
 Files: http.ts、supabase-gateway.ts、postgres-runtime.ts、v2-manifest.ts、gateway tests。
-- [ ] WAITING/PREPARING state、manifest/realtimeはreadonlyでwrite/flushゼロの回帰をRED→GREEN。
-- [ ] 境界/全員提出/正当なrebindはcommand fallback、取消/削除/期限切れ回帰。
-- [ ] preloaded room/identityとtopicsでSQL再取得削減、readyの不要名簿比較削減。
-- [ ] command1/read1/critical1の分離、flag rollback。総接続枠比較試験を用意。
+- [x] WAITING/PREPARING state、manifest/realtimeはreadonlyでwrite/flushゼロの回帰をRED→GREEN。
+- [x] 境界/全員提出/正当なrebindはcommand fallback、取消/削除/期限切れ回帰。
+- [x] preloaded room/identityとtopicsでSQL再取得削減、readyの不要名簿比較削減。
+- [x] command1/read1/critical1の分離、flag rollback。総接続枠比較試験を用意。
 
 ### Task 3: Durable outbox recovery and maintenance
 Files: realtime-outbox.ts、edge-entry.ts、maintenance migration、outbox tests。
-- [ ] skip/送信失敗のnextEligibleAtを返し、bounded retryをRED→GREEN。外部待ちにtransactionなし。
-- [ ] worker終了後の定期回復経路と期限切れ清掃を追加。既存データ/保持期間を維持。
+- [x] skip/送信失敗のnextEligibleAtを返し、bounded retryをRED→GREEN。外部待ちにtransactionなし。
+- [x] worker終了後の定期回復経路と期限切れ清掃を追加。既存データ/保持期間を維持。
 
 ### Task 4: Unified sync scheduling
 Files: useRoomSync.ts、sync scheduler、realtime-policy.ts、UI tests。
-- [ ] notification/poll/visibilityを統合しhost取得間隔、後続dirty、Retry-After、停止回帰をRED→GREEN。
-- [ ] WAITING/PREPARING参加者の通知欠落fallbackを短縮、clock境界維持。
+- [x] notification/poll/visibilityを統合しhost取得間隔、後続dirty、Retry-After、停止回帰をRED→GREEN。
+- [x] WAITING/PREPARING参加者の通知欠落fallbackを短縮、clock境界維持。
 
 ### Task 5: Verification and release
-- [ ] 全テスト、typecheck/build/bundle、diff check、実PG30回/人数、matrix/競合。
-- [ ] idle timeout A/B、flush有効/複数runtime/同時2室を測定し報告。
-- [ ] fresh reviewerによる全差分レビューと必要修正。
-- [ ] Edge先行→旧Pages互換→push/Pages deploy→公開Playwright/asset確認。
+- [x] 全テスト、typecheck/build/bundle、diff check、実PG30回/人数、matrix/競合。
+- [x] idle timeout A/B、flush有効/複数runtime/同時2室を測定し報告。
+- [x] fresh reviewerによる全差分レビューと必要修正。
+- [x] Edge先行→旧Pages互換→push/Pages deploy→公開Playwright/asset確認。
+
+本番大人数・物理端末・最大isolate数の未測定範囲はCLASSROOM_PERFORMANCE_PHASE2_VERIFICATION.mdに記録。公開少人数確認と使い捨てDB試験を区別する。
