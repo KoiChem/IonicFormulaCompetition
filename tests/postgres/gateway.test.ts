@@ -66,3 +66,22 @@ it('enforces private topic membership and denies direct table reads',async()=>{
  expect(await can(master.id,host)).toBe(true);
  await expect(pg.transaction(async tx=>{await tx.exec('SET LOCAL ROLE authenticated');await tx.query('SELECT token_hash FROM participants');})).rejects.toThrow(/permission denied/);
 });
+it('reads a missing or committed start receipt without room mutation or notification',async()=>{
+ currentUser=master;
+ let writes=0;let flushes=0;
+ const inspect=async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>)=>pg.transaction(tx=>run(new PostgresDatabase(async(q,v)=>{if(scope.startsWith('snapshot:')&&!/^SELECT\b/i.test(q.trim()))writes++;return tx.query(q,v)})));
+ const checked=createSupabaseGateway({transact,inspect,verifyUser:async()=>currentUser,masterEmail:master.email,allowedOrigins:[origin],flush:async()=>{flushes++}});
+ const settings={questionCount:5,timeLimitMinutes:3,mode:'ion',difficulty:'normal',ionAnswer:'formula',compoundPrompts:{formula:true,name:false},compoundAnswer:'formula',gradingMode:'immediate'};
+ const {room}=await(await checked(req('/api/class-rooms',{requestId:crypto.randomUUID(),settings}))).json();
+ await checked(req(`/api/rooms/${room.id}/join`,{requestId:crypto.randomUUID(),nickname:'開始確認'},'B'.repeat(43)));
+ const requestId=crypto.randomUUID();const countBefore=flushes;
+ const pending=await checked(req(`/api/rooms/${room.id}/start-status?requestId=${requestId}`));
+ expect(pending.status,await pending.clone().text()).toBe(200);
+ expect((await pending.json()).receipt).toBeNull();expect(flushes).toBe(countBefore);
+ expect((await checked(req(`/api/rooms/${room.id}/start`,{requestId,expectedRevision:1}))).status).toBe(200);
+ const status=await checked(req(`/api/rooms/${room.id}/start-status?requestId=${requestId}`));
+ const body=await status.json();expect(body.room.state).toBe('PREPARING');expect(body.receipt.preparationGeneration).toBe(1);expect(writes).toBe(0);
+ currentUser={id:'44444444-4444-4444-8444-444444444444',is_anonymous:true};
+ expect((await checked(req(`/api/rooms/${room.id}/start-status?requestId=${requestId}`))).status).toBe(401);
+ currentUser=master;
+});

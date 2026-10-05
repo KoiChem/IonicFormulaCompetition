@@ -1,6 +1,7 @@
 import { appPath } from '../../web/routing';
 "use client";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import {useStartRoom,StartStatusPanel} from "./useStartRoom";
 import { Lobby } from "./Lobby";
 import { RemovedParticipantNotice } from "./RemovedParticipantNotice";
 import { reentryNicknameKey } from "../setup/join-draft";
@@ -10,7 +11,7 @@ import { EndRoomButton } from "./EndRoomButton";
 import { InterruptRoomButton } from "./InterruptRoomButton";
 import { CompetitionPlayer } from "../play/CompetitionPlayer";
 import { CompetitionPlayerV2 } from "../play/CompetitionPlayerV2";
-import { countdownSeconds, patchJson, postJson, loadCredential, useRoomSync, type ParticipantState, type RoomStateResponse } from "../play/useRoomSync";
+import { countdownSeconds, patchJson, postJson, loadCredential, RoomSyncProvider, useRoomSync, type ParticipantState, type RoomStateResponse } from "../play/useRoomSync";
 import { Results } from "../results/Results";
 import { useResults } from "../results/useResults";
 import { ResultLoadPanel } from "../results/ResultLoadPanel";
@@ -58,7 +59,7 @@ function PreparingStatus({ data, busy, onCancel, onRefresh }: { data: RoomStateR
   const pending = data.v2?.notReadyNicknames ?? [];
   return <section className="panel wide"><h1>READY TO ROLL?</h1><p role="status">準備完了 {data.v2?.readyCount ?? 0} / {data.v2?.participantCount ?? data.participants?.length ?? 0}人</p>
     {pending.length > 0 && <p>準備待ち: {pending.join("、")}</p>}
-    {data.v2?.preparationTimedOut && <p role="alert">30秒以内に準備が揃いませんでした。参加者の通信状態を確認してください。</p>}
+    {data.v2?.preparationTimedOut && <p role="alert">問題の準備が揃いませんでした。通信状態を確認し、準備を取り消して再度開始してください。</p>}
     <div className="nickname-actions"><button type="button" disabled={busy} onClick={() => void onRefresh()}>準備を再確認</button><button type="button" disabled={busy} onClick={() => void onCancel()}>準備を取り消す</button></div>
   </section>;
 }
@@ -67,8 +68,7 @@ export function RoomScreen({ roomId }: { roomId: string }) {
   const [credential, setCredential] = useState<{ token: string } | null | undefined>(undefined);
   useEffect(() => setCredential(loadCredential(roomId)), [roomId]);
   if (credential === undefined) return <main className="page-shell"><section className="panel"><p>参加資格を確認しています…</p></section></main>;
-  if (credential) return <ParticipantRoom roomId={roomId} token={credential.token} />;
-  return <ManagedRoom roomId={roomId} />;
+  return <RoomSyncProvider key={`${roomId}:${credential?.token??"teacher"}`} roomId={roomId} token={credential?.token}>{credential?<ParticipantRoom roomId={roomId} token={credential.token}/>:<ManagedRoom roomId={roomId}/>}</RoomSyncProvider>;
 }
 
 function MateRunning({ roomId, token, participants, protocolVersion, gradingMode }: { roomId: string; token: string; participants?: ParticipantState[]; protocolVersion?: number; gradingMode?: "immediate" | "deferred" }) {
@@ -84,6 +84,7 @@ function ParticipantRoom({ roomId, token }: { roomId: string; token: string }) {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [data?.room.state, removed, terminalError]);
+  const startControl = useStartRoom(roomId, token, data?.room, refresh);
   const pendingCancel = useRef<{ requestId: string; expectedRevision: number } | null>(null);
   const [settings, setSettings] = useState<IonicFormulaGameSettings | null>(null);
   const cancelPreparation = async () => { if (!data) return; setBusy(true); try { await postJson(`/api/rooms/${encodeURIComponent(roomId)}/cancel-preparation`, { expectedRevision: data.room.revision }, { token }); await refresh(); } catch (reason: any) { alert(reason.message); } finally { setBusy(false); } };
@@ -97,13 +98,13 @@ function ParticipantRoom({ roomId, token }: { roomId: string; token: string }) {
   if (!data) return <main className="page-shell"><section className="panel"><h1>ルームへ接続中</h1><p role="status">{error ?? "読み込み中…"}</p></section></main>;
   if (data.room.state === "CANCELLED") return <CancelledRoom />;
   if (!meta.host) return data.room.playProtocolVersion === 2 ? <CompetitionPlayerV2 roomId={roomId} token={token}/> : <CompetitionPlayer roomId={roomId} token={token} />;
-  if (data.room.state !== "WAITING") return <>{data.room.state === "PREPARING" && <PreparingStatus data={data} busy={busy} onCancel={cancelPreparation} onRefresh={refresh}/>}<MateRunning roomId={roomId} token={token} participants={data.participants} protocolVersion={data.room.playProtocolVersion} gradingMode={data.room.gradingMode}/></>;
+  if (data.room.state !== "WAITING") return <>{data.room.state === "PREPARING" && <PreparingStatus data={data} busy={busy||startControl.busy} onCancel={cancelPreparation} onRefresh={refresh}/>}<MateRunning roomId={roomId} token={token} participants={data.participants} protocolVersion={data.room.playProtocolVersion} gradingMode={data.room.gradingMode}/></>;
   const activeSettings = settings ?? data.room.settings as IonicFormulaGameSettings;
-  const start = async () => { setBusy(true); try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/start`, { requestId: crypto.randomUUID(), expectedRevision: data.room.revision }, token); await refresh(); } catch (e: any) { alert(e.message); } finally { setBusy(false); } };
+  const start = () => void startControl.begin();
   const remove = async (participant: ParticipantState) => { setBusy(true); const body = { requestId: crypto.randomUUID(), participantId: participant.id, expectedRoomRevision: data.room.revision, expectedParticipantRevision: participant.revision }; try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/remove`, body, token); await refresh(); } catch (e: any) { if (e.status === 409) await refresh(); alert(e.message); } finally { setBusy(false); } };
   const saveSettings = async () => { setBusy(true); try { await patchJson(`/api/rooms/${encodeURIComponent(roomId)}/settings`, { requestId: crypto.randomUUID(), expectedRevision: data.room.revision, settings: activeSettings }, { token }); setSettings(null); await refresh(); } catch (e: any) { if (e.status === 409) await refresh(); alert(e.message); } finally { setBusy(false); } };
   const end = async () => { setBusy(true); const body = pendingCancel.current ?? { requestId: crypto.randomUUID(), expectedRevision: data.room.revision }; pendingCancel.current = body; try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/cancel`, body, token); pendingCancel.current = null; location.href = appPath("/"); } catch (e: any) { if (e.status === 409) { pendingCancel.current = null; await refresh(); } throw e; } finally { setBusy(false); } };
-  return <main className="mate-host-page"><Lobby room={data.room} participants={data.participants} joinCode={meta.joinCode} canStart={(data.participants?.length ?? 0) >= 2 && !settings} onStart={start} onRemove={remove} ownerParticipantId={data.participant?.id} busy={busy} />{data.participant && <NicknameEditor roomId={roomId} token={token} nickname={data.participant.nickname} revision={data.participant.revision} onSaved={async () => { await refresh(); }}/>}<EndRoomButton busy={busy} onEnd={end}/><details className="panel settings-editor"><summary>競技設定を変更</summary><CompetitionSettingsForm value={activeSettings} onChange={setSettings} disabled={busy}/><button className="primary-action" type="button" disabled={busy || !settings} onClick={saveSettings}>設定を保存</button></details></main>;
+  return <main className="mate-host-page"><Lobby room={data.room} participants={data.participants} joinCode={meta.joinCode} canStart={(data.participants?.length ?? 0) >= 2 && !settings} onStart={start} onRemove={remove} ownerParticipantId={data.participant?.id} busy={busy||startControl.busy} /><StartStatusPanel start={startControl}/>{data.participant && <NicknameEditor roomId={roomId} token={token} nickname={data.participant.nickname} revision={data.participant.revision} onSaved={async () => { await refresh(); }}/>}<EndRoomButton busy={busy||startControl.busy} onEnd={end}/><details className="panel settings-editor"><summary>競技設定を変更</summary><CompetitionSettingsForm value={activeSettings} onChange={setSettings} disabled={busy||startControl.busy}/><button className="primary-action" type="button" disabled={busy || startControl.busy || !settings} onClick={saveSettings}>設定を保存</button></details></main>;
 }
 
 function CancelledRoom() { return <main className="page-shell"><section className="panel"><h1>ルームは終了しました</h1><p>主催者がルームを終了しました。</p><a className="primary-link" href={appPath("/")}>ホームへ戻る</a></section></main>; }
@@ -112,6 +113,7 @@ function ManagedRoom({ roomId }: { roomId: string }) {
   const { data, error, refresh, clockRef } = useRoomSync(roomId); const [busy, setBusy] = useState(false);
   const resultLoad = useResults(roomId, undefined, data?.room.state === "FINISHED", data?.room.expiresAtMs);
   const results = resultLoad.full;
+  const startControl = useStartRoom(roomId, undefined, data?.room, refresh);
   const pendingCancel = useRef<{ requestId: string; expectedRevision: number } | null>(null);
   const pendingInterrupt = useRef<{ requestId: string; expectedRevision: number } | null>(null);
   const cancelPreparation = async () => { if (!data) return; setBusy(true); try { await postJson(`/api/rooms/${encodeURIComponent(roomId)}/cancel-preparation`, { expectedRevision: data.room.revision }); await refresh(); } catch (reason: any) { alert(reason.message); } finally { setBusy(false); } };
@@ -123,14 +125,14 @@ function ManagedRoom({ roomId }: { roomId: string }) {
   if (!data) return <main className="page-shell"><section className="panel"><h1>管理画面へ接続中</h1><p role="status">{error ?? "読み込み中…"}</p></section></main>;
   if (data.room.state === "CANCELLED") return <CancelledRoom />;
   if (data.room.state === "FINISHED") return <ResultLoadPanel state={resultLoad} retry={resultLoad.retry}/>;
-  const start = async () => { setBusy(true); try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/start`, { requestId: crypto.randomUUID(), expectedRevision: data.room.revision }); await refresh(); } catch (e: any) { alert(e.message); } finally { setBusy(false); } };
+  const start = () => void startControl.begin();
   const remove = async (participant: ParticipantState) => { setBusy(true); const body = { requestId: crypto.randomUUID(), participantId: participant.id, expectedRoomRevision: data.room.revision, expectedParticipantRevision: participant.revision }; try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/remove`, body); await refresh(); } catch (e: any) { if (e.status === 409) await refresh(); alert(e.message); } finally { setBusy(false); } };
   const activeSettings = settings ?? data.room.settings as IonicFormulaGameSettings;
   const saveSettings = async () => { setBusy(true); try { await patchJson(`/api/rooms/${encodeURIComponent(roomId)}/settings`, { requestId: crypto.randomUUID(), expectedRevision: data.room.revision, settings: activeSettings }); setSettings(null); await refresh(); } catch (e: any) { if (e.status === 409) await refresh(); alert(e.message); } finally { setBusy(false); } };
   const end = async () => { setBusy(true); const body = pendingCancel.current ?? { requestId: crypto.randomUUID(), expectedRevision: data.room.revision }; pendingCancel.current = body; try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/cancel`, body); pendingCancel.current = null; location.href = appPath("/"); } catch (e: any) { if (e.status === 409) { pendingCancel.current = null; await refresh(); } throw e; } finally { setBusy(false); } };
   const interrupt = async () => { setBusy(true); const body = pendingInterrupt.current ?? { requestId: crypto.randomUUID(), expectedRevision: data.room.revision }; pendingInterrupt.current = body; try { await retryExact(`/api/rooms/${encodeURIComponent(roomId)}/interrupt`, body); await refresh(); pendingInterrupt.current = null; } catch (e: any) { if (e.status && e.status < 500 && e.code !== "database_conflict") { pendingInterrupt.current = null; await refresh(); } throw e; } finally { setBusy(false); } };
-  if (data.room.state === "WAITING") return <main className="class-host-page"><Lobby room={data.room} participants={data.participants} joinCode={meta.joinCode} canStart={(data.participants?.length ?? 0) >= 1 && !settings} onStart={start} onRemove={remove} busy={busy}/><EndRoomButton busy={busy} onEnd={end}/><details className="panel settings-editor"><summary>競技設定を変更</summary><CompetitionSettingsForm value={activeSettings} onChange={setSettings} disabled={busy}/><button className="primary-action" type="button" disabled={busy || !settings} onClick={saveSettings}>設定を保存</button></details></main>;
-  if (data.room.state === "PREPARING") return <main className="class-host-page"><PreparingStatus data={data} busy={busy} onCancel={cancelPreparation} onRefresh={refresh}/></main>;
+  if (data.room.state === "WAITING") return <main className="class-host-page"><Lobby room={data.room} participants={data.participants} joinCode={meta.joinCode} canStart={(data.participants?.length ?? 0) >= 1 && !settings} onStart={start} onRemove={remove} busy={busy||startControl.busy}/><StartStatusPanel start={startControl}/><EndRoomButton busy={busy||startControl.busy} onEnd={end}/><details className="panel settings-editor"><summary>競技設定を変更</summary><CompetitionSettingsForm value={activeSettings} onChange={setSettings} disabled={busy||startControl.busy}/><button className="primary-action" type="button" disabled={busy || startControl.busy || !settings} onClick={saveSettings}>設定を保存</button></details></main>;
+  if (data.room.state === "PREPARING") return <main className="class-host-page"><PreparingStatus data={data} busy={busy||startControl.busy} onCancel={cancelPreparation} onRefresh={refresh}/></main>;
   if (data.room.state === "COLLECTING") return <main className="class-host-page"><section className="panel wide"><h1>記録を確認しています</h1><p>参加者からの解答記録を回収しています。</p><CollectingProgress participants={data.participants} gradingMode={data.room.gradingMode}/></section></main>;
   return <ClassRunning data={data} clockRef={clockRef} busy={busy} onInterrupt={interrupt}/>;
 }

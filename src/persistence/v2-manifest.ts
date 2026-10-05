@@ -1,3 +1,4 @@
+import {insertRoomQuestions} from './question-insert';
 import { PUBLIC_CONFIG } from "../config/public";
 import { toPublicQuestion } from "../games/ionic-formula/server/question-generator";
 import type { InternalQuestion } from "../games/ionic-formula/shared/types";
@@ -9,7 +10,7 @@ type ManifestRow = { manifest_id: string; evaluator_version: string; grading_mod
 
 export type PrepareV2RoomInput = {
   readonly roomId: string; readonly requestId: string; readonly bodyHash: string;
-  readonly expectedRoomRevision: number; readonly nowMs: number;
+  readonly expectedRoomRevision: number; readonly nowMs: number; readonly clock?:()=>number;
   readonly manifestId: string; readonly evaluatorVersion: string;
   readonly gradingMode: V2GradingMode; readonly questions: readonly InternalQuestion[];
 };
@@ -55,12 +56,7 @@ export async function prepareV2Room(db: PersistenceDatabase, input: PrepareV2Roo
     if (existing) statements.push(db.prepare(`DELETE FROM room_questions WHERE room_id = ?
       AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND last_command_id = ?)`)
       .bind(input.roomId, input.roomId, marker));
-    for (const question of input.questions) statements.push(db.prepare(`INSERT INTO room_questions
-      (room_id, question_id, ordinal, public_payload_json, answer_snapshot_json, field_spec_json, max_score)
-      SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? AND last_command_id = ?`).bind(
-      question.id, question.ordinal, json(toPublicQuestion(question, { resolvedFieldIds: [] })),
-      json(question), json(question.fields), question.maxScore, input.roomId, marker,
-    ));
+    statements.push(insertRoomQuestions(db,input.roomId,marker,input.questions));
   }
   statements.push(db.prepare(`INSERT OR IGNORE INTO v2_participant_progress(room_id, participant_id)
     SELECT p.room_id, p.id FROM participants p JOIN rooms r ON r.id = p.room_id
@@ -70,7 +66,10 @@ export async function prepareV2Room(db: PersistenceDatabase, input: PrepareV2Roo
     FROM rooms WHERE id = ? AND last_command_id = ?`).bind(actor, input.requestId, input.bodyHash, json(response), input.nowMs, input.roomId, marker));
   try {
     const result = await db.batch(statements);
-    if (changed(result[0])) return response;
+    if (changed(result[0])) {
+      if(input.clock)await db.prepare(`UPDATE v2_room_manifests SET prepared_at_ms=? WHERE room_id=? AND preparation_generation=?`).bind(input.clock(),input.roomId,generation).run();
+      return response;
+    }
   } catch (error) {
     const raced = await loadCommandReceipt<PreparedV2Room>(db, input.roomId, actor, input.requestId, input.bodyHash);
     if (raced) return raced;
@@ -96,7 +95,7 @@ export async function loadV2Manifest(db: PersistenceDatabase, roomId: string, pa
 }
 
 export type MarkV2ReadyInput = { readonly roomId: string; readonly participantId: string; readonly manifestId: string;
-  readonly preparationGeneration: number; readonly evaluatorVersion: string; readonly nowMs: number };
+  readonly preparationGeneration: number; readonly evaluatorVersion: string; readonly nowMs: number; readonly clock?:()=>number };
 export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInput) {
   const room = await db.prepare(`SELECT m.state, r.start_at_ms, r.deadline_at_ms, r.expires_at_ms, r.settings_json,
       m.manifest_id, m.evaluator_version, m.preparation_generation, m.prepared_at_ms
@@ -117,9 +116,10 @@ export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInp
     .first<{ participant_count: number; ready_count: number }>();
   const participantCount = Number(counts?.participant_count ?? 0);
   const readyCount = Number(counts?.ready_count ?? 0);
+  const decisionAtMs=input.clock?.()??input.nowMs;
   if (participantCount && readyCount === participantCount && room.state === "PREPARING"
-    && input.nowMs < room.prepared_at_ms + 30_000) {
-    const startAtMs = input.nowMs + PUBLIC_CONFIG.countdownSeconds * 1_000;
+    && decisionAtMs < room.prepared_at_ms + 30_000) {
+    const startAtMs = decisionAtMs + PUBLIC_CONFIG.countdownSeconds * 1_000;
     const timeLimit = (JSON.parse(room.settings_json) as { timeLimitMinutes: number }).timeLimitMinutes * 60_000;
     const marker = commandMarker("v2-ready", `${input.roomId}:${input.preparationGeneration}`);
     await db.batch([db.prepare(`UPDATE rooms SET state = 'COUNTDOWN', revision = revision + 1,
@@ -130,7 +130,7 @@ export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInp
         WHERE p.room_id = rooms.id AND p.status = 'ACTIVE' AND COALESCE(v.ready_generation, 0) != ?)`)
       .bind(startAtMs, startAtMs + timeLimit, startAtMs + timeLimit,
         PUBLIC_CONFIG.retentionMs.classCompetition, PUBLIC_CONFIG.retentionMs.mateMatch,
-        marker, input.roomId, input.preparationGeneration, input.nowMs, input.preparationGeneration),
+        marker, input.roomId, input.preparationGeneration, decisionAtMs, input.preparationGeneration),
     db.prepare(`UPDATE v2_room_manifests SET state = 'COUNTDOWN' WHERE room_id = ?
       AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND last_command_id = ?)`)
       .bind(input.roomId, input.roomId, marker),
@@ -146,7 +146,7 @@ export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInp
     .bind(input.roomId).first<Pick<RoomRow, "state" | "start_at_ms" | "deadline_at_ms">>();
   return { state: latest?.state ?? room.state, readyCount, participantCount,
     startAtMs: latest?.start_at_ms ?? null, deadlineAtMs: latest?.deadline_at_ms ?? null,
-    preparationTimedOut: room.state === "PREPARING" && input.nowMs >= room.prepared_at_ms + 30_000 };
+    preparationTimedOut: room.state === "PREPARING" && decisionAtMs >= room.prepared_at_ms + 30_000 };
 }
 
 export async function cancelV2Preparation(db: PersistenceDatabase, input: { roomId: string; expectedRoomRevision: number; nowMs: number }) {

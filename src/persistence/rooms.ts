@@ -1,3 +1,4 @@
+import {insertRoomQuestions} from './question-insert';
 import type { SavedQuestionProfile } from "./question-profiles";
 import { toPublicQuestion } from "../games/ionic-formula/server/question-generator";
 import type { InternalQuestion, IonicFormulaGameSettings } from "../games/ionic-formula/shared/types";
@@ -259,6 +260,7 @@ export type StartRoomInput = {
   readonly bodyHash: string;
   readonly expectedRoomRevision: number;
   readonly nowMs: number;
+  readonly clock?:()=>number;
   readonly startAtMs: number;
   readonly deadlineAtMs: number;
   readonly questions: readonly InternalQuestion[];
@@ -335,7 +337,7 @@ export async function startRoom(
   if (input.startAtMs <= input.nowMs || input.deadlineAtMs <= input.startAtMs) throw new TypeError("invalid room schedule");
 
   const marker = commandMarker(actorId, input.requestId);
-  const result: StartedRoom = {
+  let result: StartedRoom = {
     roomId: input.roomId,
     state: "COUNTDOWN",
     roomRevision: input.expectedRoomRevision + 1,
@@ -370,20 +372,7 @@ export async function startRoom(
     WHERE room_id = ? AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND last_command_id = ?)
   `).bind(input.roomId, input.roomId, input.roomId, marker));
 
-  for (const question of input.questions) {
-    statements.push(database.prepare(`
-      INSERT INTO room_questions (
-        room_id, question_id, ordinal, public_payload_json, answer_snapshot_json, field_spec_json, max_score
-      )
-      SELECT id, ?, ?, ?, ?, ?, ? FROM rooms
-      WHERE id = ? AND last_command_id = ?
-    `).bind(
-      question.id, question.ordinal,
-      json(toPublicQuestion(question, { resolvedFieldIds: [] })),
-      json(question), json(question.fields), question.maxScore,
-      input.roomId, marker,
-    ));
-  }
+  statements.push(insertRoomQuestions(database,input.roomId,marker,input.questions));
   statements.push(database.prepare(`
     INSERT INTO participant_fields (room_id, participant_id, question_id, field_id)
     SELECT p.room_id, p.id, q.question_id, json_extract(field.value, '$.id')
@@ -393,17 +382,24 @@ export async function startRoom(
     JOIN json_each(q.field_spec_json) AS field
     WHERE p.room_id = ? AND p.status = 'ACTIVE' AND r.last_command_id = ?
   `).bind(input.roomId, marker));
-  statements.push(database.prepare(`
-    INSERT INTO command_receipts (
-      room_id, actor_id, request_id, body_hash, result_code, result_json, processed_at_ms, expires_at_ms
-    )
-    SELECT id, ?, ?, ?, 'started', ?, ?, expires_at_ms FROM rooms
-    WHERE id = ? AND last_command_id = ?
-  `).bind(actorId, input.requestId, input.bodyHash, json(result), input.nowMs, input.roomId, marker));
-
+  const receipt=()=>database.prepare(`INSERT INTO command_receipts(room_id,actor_id,request_id,body_hash,result_code,result_json,processed_at_ms,expires_at_ms)
+    SELECT id,?,?,?,'started',?,?,expires_at_ms FROM rooms WHERE id=? AND last_command_id=?`)
+    .bind(actorId,input.requestId,input.bodyHash,json(result),input.clock?.()??input.nowMs,input.roomId,marker);
+  const lateSchedule=database.transactional&&input.clock;
+  if(!lateSchedule)statements.push(receipt());
   let batch;
   try {
     batch = await database.batch(statements);
+    if(lateSchedule&&changed(batch[0])){
+      const startedAt=input.clock!()+PUBLIC_CONFIG.countdownSeconds*1000;
+      result={...result,startAtMs:startedAt,deadlineAtMs:startedAt+(input.deadlineAtMs-input.startAtMs)};
+      await database.batch([
+        database.prepare(`UPDATE rooms SET start_at_ms=?,deadline_at_ms=?,expires_at_ms=MAX(expires_at_ms,?+CASE kind WHEN 'class' THEN ? ELSE ? END) WHERE id=? AND last_command_id=?`)
+          .bind(result.startAtMs,result.deadlineAtMs,result.deadlineAtMs,PUBLIC_CONFIG.retentionMs.classCompetition,PUBLIC_CONFIG.retentionMs.mateMatch,input.roomId,marker),
+        database.prepare(`UPDATE creation_receipts SET expires_at_ms=(SELECT expires_at_ms FROM rooms WHERE id=?) WHERE room_id=?`).bind(input.roomId,input.roomId),
+        database.prepare(`UPDATE command_receipts SET expires_at_ms=(SELECT expires_at_ms FROM rooms WHERE id=?) WHERE room_id=?`).bind(input.roomId,input.roomId),receipt(),
+      ]);
+    }
   } catch (error) {
     const committed = await loadCommandReceipt<StartedRoom>(database, input.roomId, actorId, input.requestId, input.bodyHash);
     if (committed) return committed;

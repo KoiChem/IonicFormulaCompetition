@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { rememberHistoryRoom } from "../../../src/features/results/history-index";
 import { loadSavedNickname, saveNickname } from "../../../src/features/setup/saved-nickname";
 import { clearPendingJoin, clearPreviousParticipantSession, beginPendingJoin, completePendingJoin, loadPendingJoin, reentryNicknameKey, type PendingJoin } from "../../../src/features/setup/join-draft";
-import { fetchJsonWithTimeout, loadCredential, postJson, randomCredential } from "../../../src/features/play/useRoomSync";
+import { fetchJsonWithTimeout, loadCredential, randomCredential } from "../../../src/features/play/useRoomSync";
+import { submitPendingJoin } from "../../../src/features/setup/join-recovery";
 import { recoveryDestination, type RecoveryDestination } from "../../../src/features/play/active-room-recovery";
 import { settingsSummary } from "../../../src/features/setup/CompetitionSettingsForm";
 import type { IonicFormulaGameSettings } from "../../../src/games/ionic-formula/shared/types";
@@ -85,8 +86,7 @@ export default function JoinPage({ roomId }: { roomId: string }) {
       return;
     }
     try {
-      const body = await postJson(`/api/rooms/${encodeURIComponent(roomId)}/join`,
-        { requestId: draft.requestId, nickname: draft.nickname }, { token: draft.token });
+      const body = await submitPendingJoin(roomId, draft);
       if (!completePendingJoin(localStorage, roomId, draft, body.participant.id)) throw new Error("参加資格を保存できません。もう一度確認してください");
       saveNickname(localStorage, body.participant.nickname);
       try { clearPreviousParticipantSession(sessionStorage, roomId); sessionStorage.removeItem(reentryNicknameKey(roomId)); } catch { /* session data may be unavailable */ }

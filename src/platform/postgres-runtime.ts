@@ -1,31 +1,40 @@
 import postgres from 'postgres';
 import { PostgresDatabase, type Query } from './postgres-database';
-import type { TransactionRunner } from './supabase-gateway';
+import type { TransactionRunner, TransactionMetrics } from './supabase-gateway';
 export function transactionIsolation(scope:string){
+  if(scope.startsWith('snapshot:'))return 'repeatable read read only';
   return scope.startsWith('room:')||scope.startsWith('broadcast:')?'read committed':'serializable';
 }
-export function postgresTransactions(connectionString:string):TransactionRunner {
+export function postgresTransactions(connectionString:string,options:{ssl?:'require'|false;queryDelayMs?:number}={}):TransactionRunner {
   // Transaction-mode Supavisor does not support prepared statements.
-  const sql=postgres(connectionString,{prepare:false,max:1,ssl:'require',idle_timeout:1,connect_timeout:10});
-  return async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>):Promise<T>=>{
+  const sql=postgres(connectionString,{prepare:false,max:1,ssl:options.ssl??'require',idle_timeout:1,connect_timeout:10});
+  return async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>,metrics?:TransactionMetrics):Promise<T>=>{
     for(let attempt=0;;attempt++){
       // SERIALIZABLE snapshots taken by the lock SELECT would predate waiting.
       // Room commands instead read fresh statements after their shared mutex.
+      const queuedAt=Date.now();
       try{return await sql.begin(`isolation level ${transactionIsolation(scope)}`,async tx=>{
+        if(metrics)metrics.poolWaitMs+=Date.now()-queuedAt;
         await tx.unsafe('SET LOCAL statement_timeout = 9000');
         await tx.unsafe('SET LOCAL lock_timeout = 7000');
-        await tx.unsafe('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);
+        const lockStarted=Date.now();
+        if(!scope.startsWith('snapshot:')&&!scope.startsWith('quota:'))await tx.unsafe('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);
+        if(metrics)metrics.roomLockWaitMs+=Date.now()-lockStarted;
+        const workStarted=Date.now();
         const execute:Query=async(query,values)=>{
           try {
+            if(metrics)metrics.queryCount++;
+            if(options.queryDelayMs)await new Promise(resolve=>setTimeout(resolve,options.queryDelayMs));
             const rows=await tx.unsafe(query,values as any[]);
             return {rows:Array.from(rows) as Record<string,unknown>[],affectedRows:rows.count};
           } catch(error) {
             // Static SQL and SQLSTATE only; bound answers and credentials are never logged.
-            console.error(JSON.stringify({event:'database_query_failed',code:(error as {code?:string}).code,query}));
+            console.error(JSON.stringify({event:'database_query_failed',code:(error as {code?:string}).code,operation:query.trim().split(/\s/)[0]}));
             throw error;
           }
         };
-        const result=await run(new PostgresDatabase(execute));
+        let result:T;
+        try{result=await run(new PostgresDatabase(execute));}finally{if(metrics)metrics.dbWorkMs+=Date.now()-workStarted;}
         if(result instanceof Response&&result.status>=500)throw result;
         return result;
       }) as T;}catch(error){

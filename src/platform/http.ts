@@ -922,26 +922,30 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     const nowMs = dependencies.now();
     requireUnexpired(room, nowMs);
     await authorizeRoomOwner(dependencies, request, room);
+    const replay=await loadCommandReceipt<Record<string,unknown>>(dependencies.database,room.id,room.game_version==='2'?`v2-prepare:${room.id}`:`room:${room.id}`,requestId(value.requestId),bodyHash);
+    if(replay)return jsonResponse(room.game_version==='2'?replay:{state:replay.state,roomRevision:replay.roomRevision,startAtMs:replay.startAtMs,deadlineAtMs:replay.deadlineAtMs});
     const settings = parseSettings(JSON.parse(room.settings_json) as unknown);
     const questionProfile = await readRoomQuestionProfile(dependencies.database, room.id);
     if (room.game_version === "2") {
       return jsonResponse(await prepareV2Room(dependencies.database, {
         roomId: room.id, requestId: requestId(value.requestId), bodyHash,
-        expectedRoomRevision: integerValue(value.expectedRevision, "expectedRevision"), nowMs,
+        expectedRoomRevision: integerValue(value.expectedRevision, "expectedRevision"), nowMs:dependencies.now(),clock:dependencies.now,
         manifestId: dependencies.randomUUID(), evaluatorVersion: EVALUATOR_VERSION,
         gradingMode: settings.gradingMode ?? "immediate", questions: generateQuestionSet(settings, dependencies.random, questionProfile),
       }));
     }
-    const startAtMs = nowMs + PUBLIC_CONFIG.countdownSeconds * 1_000;
+    const questions=generateQuestionSet(settings,dependencies.random,questionProfile);
+    const scheduledAt=dependencies.now();
+    const startAtMs = scheduledAt + PUBLIC_CONFIG.countdownSeconds * 1_000;
     const started = await startRoom(dependencies.database, {
       roomId: room.id,
       requestId: requestId(value.requestId),
       bodyHash,
       expectedRoomRevision: integerValue(value.expectedRevision, "expectedRevision"),
-      nowMs,
+      nowMs:scheduledAt,clock:dependencies.now,
       startAtMs,
       deadlineAtMs: startAtMs + settings.timeLimitMinutes * 60_000,
-      questions: generateQuestionSet(settings, dependencies.random, questionProfile),
+      questions,
     });
     return jsonResponse({
       state: started.state,
@@ -949,6 +953,25 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       startAtMs: started.startAtMs,
       deadlineAtMs: started.deadlineAtMs,
     });
+  });
+
+  const startStatus = (request: Request, parameters: RouteParameters) => safe(async () => {
+    const key = new URL(request.url).searchParams.get("requestId");
+    if (!key || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key)) throw new ApiError(400, "invalid_request", "開始要求を確認してください");
+    const room = await loadRoom(dependencies.database, parameters.id);
+    const nowMs = dependencies.now();
+    requireUnexpired(room, nowMs);
+    await authorizeRoomOwner(dependencies, request, room);
+    const actor = room.game_version === "2" ? `v2-prepare:${room.id}` : `room:${room.id}`;
+    const receipt = await dependencies.database.prepare(`SELECT result_json, processed_at_ms FROM command_receipts
+      WHERE room_id=? AND actor_id=? AND request_id=? AND expires_at_ms>?`)
+      .bind(room.id, actor, key, nowMs).first<{result_json:string;processed_at_ms:number}>();
+    const phase = room.game_version === "2" ? await loadV2RoomPhase(dependencies.database, room.id, nowMs) : null;
+    const stored = receipt ? JSON.parse(receipt.result_json) : null;
+    return jsonResponse({requestId:key, receipt: receipt ? {protocolVersion:room.game_version === "2" ? 2 : 1,
+      roomRevision:stored.roomRevision, ...(stored.manifestId ? {manifestId:stored.manifestId,preparationGeneration:stored.preparationGeneration} : {}), processedAtMs:receipt.processed_at_ms} : null,
+      room:{state:stateOf(room,nowMs),revision:room.revision,startAtMs:room.start_at_ms,expiresAtMs:room.expires_at_ms,
+        manifestId:phase?.manifestId??null,preparationGeneration:phase?.preparationGeneration??null,preparationTimedOut:phase?.preparationTimedOut??false}, serverNow:nowMs});
   });
 
   const manifest = (request: Request, parameters: RouteParameters) => safe(async () => {
@@ -971,7 +994,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       manifestId: stringValue(value.manifestId, "manifestId", 128),
       evaluatorVersion: stringValue(value.evaluatorVersion, "evaluatorVersion", 128),
       preparationGeneration: integerValue(value.preparationGeneration, "preparationGeneration", 1),
-      nowMs: dependencies.now(),
+      nowMs: dependencies.now(),clock:dependencies.now,
     }));
   });
 
@@ -1383,6 +1406,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
     nickname,
     updateRoomSettings,
     startRoom: start,
+    startStatus,
     manifest,
     ready,
     cancelPreparation,

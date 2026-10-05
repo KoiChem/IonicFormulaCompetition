@@ -2,7 +2,7 @@ import { transactionPoolerUrl } from './database-url';
 import { postgresTransactions } from './postgres-runtime';
 import { createSupabaseGateway } from './supabase-gateway';
 import { verifySupabaseUser } from './supabase-identity';
-import { flushRoomEvents } from './realtime-outbox';
+import { flushRoomEvents, coalescedRoomFlusher } from './realtime-outbox';
 import { createSharedTeacherAuthority } from './shared-teacher-authority';
 import { sharedTeacherStore } from './shared-teacher-store';
 declare const Deno:{env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):void};
@@ -14,15 +14,19 @@ const serviceKey=required('SUPABASE_SERVICE_ROLE_KEY');
 const databaseUrl=Deno.env.get('COMPETITION_DATABASE_URL')??transactionPoolerUrl(required('SUPABASE_DB_URL'),
   'slktkbpvvsfpflnmpuvr','aws-0-ap-northeast-2.pooler.supabase.com');
 const transact=postgresTransactions(databaseUrl);
-async function flush(publicId:string){
+const inspect=postgresTransactions(databaseUrl);
+const flush=coalescedRoomFlusher(async(publicId:string)=>{
   await flushRoomEvents(transact,publicId,async(topic,event,payload)=>{
     const result=await fetch(`${url}/realtime/v1/api/broadcast`,{method:'POST',headers:{authorization:`Bearer ${serviceKey}`,apikey:serviceKey,'content-type':'application/json'},
       body:JSON.stringify({messages:[{topic,event,payload,private:true}]}),signal:AbortSignal.timeout(3000)});
     if(!result.ok)throw new Error('Broadcast delivery failed');
   });
-}
-const gateway=createSupabaseGateway({transact,verifyUser:request=>verifySupabaseUser(request,url,key),masterEmail:required('MASTER_TEACHER_EMAIL'),
+});
+const gateway=createSupabaseGateway({transact,inspect,verifyUser:request=>verifySupabaseUser(request,url,key),masterEmail:required('MASTER_TEACHER_EMAIL'),
   allowedOrigins:required('ALLOWED_ORIGINS').split(',').map(x=>x.trim()).filter(Boolean),flush:async id=>{EdgeRuntime.waitUntil(flush(id));}});
+// Keep auxiliary retention cleanup outside foreground requests and room locks.
+let nextMaintenanceAt=0;
+function maintain(){if(Date.now()<nextMaintenanceAt||Math.random()>=.02)return;nextMaintenanceAt=Date.now()+60000;EdgeRuntime.waitUntil(transact('maintenance',db=>db.prepare('SELECT app_prune_auxiliary()').run()).catch(()=>{}));}
 const store=sharedTeacherStore(transact,required('MASTER_TEACHER_EMAIL').trim().toLowerCase());
 const authority=createSharedTeacherAuthority({
   now:Date.now,masterEmail:required('MASTER_TEACHER_EMAIL'),
@@ -31,4 +35,4 @@ const authority=createSharedTeacherAuthority({
     new Request(`${authUrl}/auth/v1/user`,{headers:{authorization:`Bearer ${bearerToken}`}}),authUrl,publishableKey),
   readAllowlist:store.readAllowlist,mutateAllowlist:store.mutateAllowlist,
 });
-Deno.serve(request=>new URL(request.url).pathname.endsWith('/shared-teacher')?authority(request):gateway(request));
+Deno.serve(async request=>{const response=await (new URL(request.url).pathname.endsWith('/shared-teacher')?authority(request):gateway(request));maintain();return response;});

@@ -1,9 +1,10 @@
 import { useRoomRealtime, type RoomTopics, type RoomEvent } from '../../web/realtime';
 import { pollInterval, retryPollDelay } from '../../web/realtime-policy';
 import { apiFetch, type ApiFetchOptions } from '../../web/api';
+import { coalesceRequest } from '../../web/coalesce-request';
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, createElement, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompetitionClock, type ClockSample } from "./clock";
 
 export type RoomView = { id: string; kind: "class" | "mate"; state: "WAITING" | "PREPARING" | "COUNTDOWN" | "RUNNING" | "COLLECTING" | "FINISHED" | "CANCELLED" | "EXPIRED"; revision: number; playProtocolVersion?: number; gradingMode?: "immediate" | "deferred"; endReason?: "normal" | "interrupted"; settings: Record<string, unknown>; maxScore: number; startAtMs: number | null; deadlineAtMs: number | null; expiresAtMs: number };
@@ -64,7 +65,7 @@ export async function fetchJsonWithTimeout(path: string, init: ApiFetchOptions, 
   finally { if (timer) clearTimeout(timer); }
 }
 
-export function useRoomSync(roomId: string, token?: string | null) {
+function useOwnedRoomSync(roomId: string, token?: string | null) {
   const [data, setData] = useState<RoomStateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -72,7 +73,6 @@ export function useRoomSync(roomId: string, token?: string | null) {
   const [terminalError, setTerminalError] = useState<string | null>(null);
   const stopped = useRef(false);
   const clockRef = useRef<CompetitionClock | null>(null);
-  const initialSync = useRef(true);
   const requestSequence = useRef(0);
   const appliedSequence = useRef(0);
   const latestData = useRef<RoomStateResponse | null>(null);
@@ -81,10 +81,10 @@ export function useRoomSync(roomId: string, token?: string | null) {
     const nextIdentity = `${roomId}:${token ?? ""}`;
     if (identity.current === nextIdentity) return;
     identity.current = nextIdentity;
-    stopped.current = false; initialSync.current = true; latestData.current = null; clockRef.current = null;
+    stopped.current = false; latestData.current = null; clockRef.current = null;
     setData(null); setError(null); setConnected(false); setRemoved(null); setTerminalError(null);
   }, [roomId, token]);
-  const sync = useCallback(async () => {
+  const sync = useMemo(() => coalesceRequest(async () => {
     if (stopped.current) throw new Error("この参加資格は使用できません");
     const requestIdentity = `${roomId}:${token ?? ""}`;
     const sequence = ++requestSequence.current;
@@ -114,28 +114,25 @@ export function useRoomSync(roomId: string, token?: string | null) {
     if (selected === next) { appliedSequence.current = sequence; latestData.current = next; setData(next); }
     setConnected(true); setError(null);
     return { next, sample: { sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow, serverTiming:next.serverTiming } satisfies ClockSample };
-  }, [roomId, token]);
+  }), [roomId, token]);
 
   const eventRefresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const resync = useCallback(() => {
     if (eventRefresh.current || stopped.current) return;
     eventRefresh.current = setTimeout(() => {
       eventRefresh.current = undefined;
-      void sync().catch(() => {});
+      void sync(true).catch(() => {});
     }, 100);
   }, [sync]);
-  const onEvent = useCallback((event: RoomEvent, kind: 'control' | 'host') => {
-    if (kind === 'host' && event.participants && latestData.current) {
-      const current = latestData.current;
-      const previous = new Map(current.participants?.map(p => [p.id, p]) ?? []);
-      const participants = event.participants.map(p => {
-        const old = previous.get(p.id);
-        return old && old.revision > p.revision ? old : p;
-      });
-      const next = { ...current, room: { ...current.room, revision: Math.max(current.room.revision, event.roomRevision ?? current.room.revision) }, participants };
-      latestData.current = next; setData(next);
-    } else resync();
+  const lastHostRefresh = useRef(0);
+  const hostRefresh = useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  const onEvent = useCallback((_event: RoomEvent, kind: 'control' | 'host') => {
+    if (kind === 'control') { resync(); return; }
+    if(hostRefresh.current)return;
+    const delay=Math.max(0,2000-(Date.now()-lastHostRefresh.current));
+    hostRefresh.current=setTimeout(()=>{hostRefresh.current=undefined;lastHostRefresh.current=Date.now();resync();},delay);
   }, [resync]);
+  useEffect(()=>()=>{if(hostRefresh.current)clearTimeout(hostRefresh.current);},[roomId,token]);
   const realtimeConnected = useRoomRealtime(data?.realtime, !!data && !['FINISHED','CANCELLED','EXPIRED'].includes(data.room.state), onEvent, resync);
   const realtimeStatus = useRef(false);
   realtimeStatus.current = realtimeConnected;
@@ -147,14 +144,17 @@ export function useRoomSync(roomId: string, token?: string | null) {
     clockRef.current?.synchronizeBest(samples);
   }, [sync]);
 
+  const pollingPhase = data?.room.state ?? 'WAITING';
   useEffect(() => {
     let active = true; let timer = 0; let failures = 0; let retryAfter: number | null = null;
-    const run = async () => { try { if (initialSync.current) { initialSync.current = false; await syncThree(); } else await sync(); failures = 0; retryAfter = null; } catch (reason) { failures += 1; retryAfter = (reason as {retryAfterMs?:number}).retryAfterMs ?? null; if (active) { setConnected(false); setError(reason instanceof Error ? reason.message : "再接続しています"); } } finally { if (active && !stopped.current) timer = window.setTimeout(run, retryPollDelay(pollInterval(latestData.current?.realtime?.role ?? (token ? "participant" : "teacher"), latestData.current?.room.state ?? "WAITING", realtimeStatus.current, document.hidden), failures, retryAfter)); } };
+    // Only take extra clock samples once a start time exists, not at every join.
+    let sampleClock = pollingPhase === 'COUNTDOWN';
+    const run = async () => { try { if (sampleClock) { sampleClock = false; await syncThree(); } else await sync(); failures = 0; retryAfter = null; } catch (reason) { failures += 1; retryAfter = (reason as {retryAfterMs?:number}).retryAfterMs ?? null; if (active) { setConnected(false); setError(reason instanceof Error ? reason.message : "再接続しています"); } } finally { if (active && !stopped.current) timer = window.setTimeout(run, retryPollDelay(pollInterval(latestData.current?.realtime?.role ?? (token ? "participant" : "teacher"), latestData.current?.room.state ?? "WAITING", realtimeStatus.current, document.hidden), failures, retryAfter)); } };
     void run();
-    const visibility = () => { if (!document.hidden && !stopped.current) { clockRef.current?.requireResync(); void syncThree().catch(() => {}); } };
+    const visibility = () => { if (!document.hidden && !stopped.current) { clockRef.current?.requireResync(); void (clockRef.current ? syncThree() : sync()).catch(() => {}); } };
     document.addEventListener("visibilitychange", visibility);
     return () => { active = false; clearTimeout(timer); document.removeEventListener("visibilitychange", visibility); };
-  }, [sync, syncThree, data?.room.state]);
+  }, [sync, syncThree, pollingPhase]);
   useEffect(() => {
     if (!data || ['FINISHED','CANCELLED','EXPIRED'].includes(data.room.state)) return;
     const now = clockRef.current?.serverNowMs(performance.now()) ?? data.serverNow;
@@ -164,7 +164,20 @@ export function useRoomSync(roomId: string, token?: string | null) {
     const timer = setTimeout(resync, Math.max(0, boundary-now+50));
     return () => clearTimeout(timer);
   }, [data?.room.state, data?.room.startAtMs, data?.room.deadlineAtMs, data?.v2?.cutoffAtMs, data?.v2?.collectionUntilMs, resync]);
-  return { data, error, connected, removed, terminalError, refresh: sync, clockRef };
+  const refresh = useCallback(() => sync(true), [sync]);
+  return { data, error, connected, removed, terminalError, refresh, clockRef };
+}
+
+type SharedSync = ReturnType<typeof useOwnedRoomSync>;
+const RoomSyncContext = createContext<{roomId:string;token:string|null;value:SharedSync}|null>(null);
+export function RoomSyncProvider({roomId,token,children}:{roomId:string;token?:string|null;children:ReactNode}) {
+  const value=useOwnedRoomSync(roomId,token);
+  return createElement(RoomSyncContext.Provider,{value:{roomId,token:token??null,value}},children);
+}
+export function useRoomSync(roomId:string,token?:string|null):SharedSync {
+  const shared=useContext(RoomSyncContext);
+  if(!shared||shared.roomId!==roomId||shared.token!==(token??null))throw new Error('Room synchronization provider differs');
+  return shared.value;
 }
 
 export async function postJson(path: string, body: unknown, options: { token?: string; creationKey?: string; timeoutMs?: number } = {}): Promise<any> {

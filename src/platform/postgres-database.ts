@@ -15,7 +15,7 @@ export function postgresQuery(input: string, values: readonly SqlValue[] = []): 
     .replace(/json_extract\(([^,()]+),\s*'\$((?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d+\])+)'\)/g, (_match, expression: string, path: string) => {
       const keys = Array.from(path.matchAll(/\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]/g), m => m[1] ?? m[2]);
       const extract = `((${expression})::text::jsonb #>> '{${keys.join(',')}}')`;
-      return ['correctCount', 'elapsedCs', 'rank'].includes(keys.at(-1)!) ? `${extract}::bigint` : extract;
+      return ['correctCount', 'elapsedCs', 'rank', 'ordinal', 'maxScore'].includes(keys.at(-1)!) ? `${extract}::bigint` : extract;
     })
     .replace(/MAX\((expires_at_ms|0),/g, 'GREATEST($1,');
   const ignore = /\bINSERT OR IGNORE\b/i.test(sql);
@@ -59,6 +59,7 @@ class PostgresStatement implements PreparedSql {
 /** Must be created inside the enclosing request transaction. Batch does not
  * create nested transactions: every read and write shares the same snapshot. */
 export class PostgresDatabase implements PersistenceDatabase {
+  readonly transactional=true;
   constructor(private readonly execute: Query) {}
   prepare(query: string) { return new PostgresStatement(this.execute, query); }
   async batch(statements: PreparedSql[]) { const results = []; for (const statement of statements) results.push(await statement.run()); return results; }

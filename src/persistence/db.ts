@@ -14,6 +14,7 @@ export interface PreparedSql {
 }
 
 export interface PersistenceDatabase {
+  readonly transactional?:boolean;
   prepare(query: string): PreparedSql;
   batch(statements: PreparedSql[]): Promise<readonly SqlRunResult[]>;
 }
