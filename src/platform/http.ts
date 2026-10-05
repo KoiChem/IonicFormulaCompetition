@@ -65,6 +65,9 @@ export type ApiDependencies = {
   readonly now: () => number;
   readonly random: () => number;
   readonly randomUUID: () => string;
+  /** Trusted gateway context, never populated from client JSON. */
+  readonly snapshotRoom?: RoomRow;
+  readonly snapshotParticipant?: Awaited<ReturnType<typeof identifyParticipant>>;
 };
 
 export class ApiError extends Error {
@@ -84,7 +87,7 @@ type ParsedBody = {
   readonly bodyHash: string;
 };
 
-type RoomRow = {
+export type RoomRow = {
   readonly id: string;
   readonly public_id: string;
   readonly join_code: string;
@@ -975,7 +978,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
   });
 
   const manifest = (request: Request, parameters: RouteParameters) => safe(async () => {
-    const room = await loadRoom(dependencies.database, parameters.id);
+    const room = dependencies.snapshotRoom ?? await loadRoom(dependencies.database, parameters.id);
     requireUnexpired(room, dependencies.now());
     if (room.game_version !== "2") throw new ApiError(404, "not_found", "問題の準備情報がありません");
     const participant = await requireParticipant(dependencies.database, request, room.id);
@@ -1188,16 +1191,18 @@ export function createApiHandlers(dependencies: ApiDependencies) {
   });
 
   const state = (request: Request, parameters: RouteParameters) => safe(async () => {
-    let room = await loadRoom(dependencies.database, parameters.id);
+    let room = dependencies.snapshotRoom ?? await loadRoom(dependencies.database, parameters.id);
     const nowMs = dependencies.now();
     if (room.expires_at_ms <= nowMs) {
-      await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
+      if(!dependencies.snapshotRoom) await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
       throw new ApiError(410, "expired", "このルームの閲覧期限は終了しました");
     }
-    await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
+    if(!dependencies.snapshotRoom) await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     requireUnexpired(room, nowMs);
-    await tryFinalize(dependencies.database, room, nowMs);
-    room = await loadRoom(dependencies.database, room.id);
+    if(!dependencies.snapshotRoom) {
+      await tryFinalize(dependencies.database, room, nowMs);
+      room = await loadRoom(dependencies.database, room.id);
+    }
     const v2Phase = room.game_version === "2" ? await loadV2RoomPhase(dependencies.database, room.id, nowMs) : null;
     const v2Preparation = v2Phase?.state === "PREPARING"
       ? (await dependencies.database.prepare(`SELECT p.nickname, v.ready_generation FROM participants p
@@ -1211,7 +1216,7 @@ export function createApiHandlers(dependencies: ApiDependencies) {
       notReadyNicknames: v2Preparation?.filter(p => p.ready_generation !== v2Phase.preparationGeneration).map(p => p.nickname) ?? [],
     } : undefined;
     if (request.headers.has("authorization")) {
-      const identity = await identifyParticipant(dependencies.database, request, room.id);
+      const identity = dependencies.snapshotParticipant ?? await identifyParticipant(dependencies.database, request, room.id);
       if (identity.status === "REMOVED") {
         const roomState = stateOf(room, nowMs);
         return jsonResponse({ error: {

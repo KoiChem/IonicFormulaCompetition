@@ -117,8 +117,10 @@ export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInp
   const participantCount = Number(counts?.participant_count ?? 0);
   const readyCount = Number(counts?.ready_count ?? 0);
   const decisionAtMs=input.clock?.()??input.nowMs;
+  let attemptedCountdown=false;
   if (participantCount && readyCount === participantCount && room.state === "PREPARING"
     && decisionAtMs < room.prepared_at_ms + 30_000) {
+    attemptedCountdown=true;
     const startAtMs = decisionAtMs + PUBLIC_CONFIG.countdownSeconds * 1_000;
     const timeLimit = (JSON.parse(room.settings_json) as { timeLimitMinutes: number }).timeLimitMinutes * 60_000;
     const marker = commandMarker("v2-ready", `${input.roomId}:${input.preparationGeneration}`);
@@ -141,9 +143,9 @@ export async function markV2Ready(db: PersistenceDatabase, input: MarkV2ReadyInp
       WHERE room_id = ? AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND last_command_id = ?)`)
       .bind(input.roomId, input.roomId, input.roomId, marker)]);
   }
-  const latest = await db.prepare(`SELECT m.state, r.start_at_ms, r.deadline_at_ms
+  const latest = attemptedCountdown ? await db.prepare(`SELECT m.state, r.start_at_ms, r.deadline_at_ms
     FROM rooms r JOIN v2_room_manifests m ON m.room_id = r.id WHERE r.id = ?`)
-    .bind(input.roomId).first<Pick<RoomRow, "state" | "start_at_ms" | "deadline_at_ms">>();
+    .bind(input.roomId).first<Pick<RoomRow, "state" | "start_at_ms" | "deadline_at_ms">>() : room;
   return { state: latest?.state ?? room.state, readyCount, participantCount,
     startAtMs: latest?.start_at_ms ?? null, deadlineAtMs: latest?.deadline_at_ms ?? null,
     preparationTimedOut: room.state === "PREPARING" && decisionAtMs >= room.prepared_at_ms + 30_000 };

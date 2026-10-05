@@ -1,4 +1,6 @@
 import { ensureSession, getSupabaseClient } from './supabase';
+import { sessionRefresher } from './refresh-session';
+const refreshSession=sessionRefresher(()=>getSupabaseClient().auth.refreshSession());
 export function apiHeaders(sessionToken: string, supplied?: HeadersInit): Headers {
   const headers = new Headers(supplied);
   const participant = headers.get('authorization');
@@ -16,6 +18,6 @@ export async function apiFetch(path: string, init: ApiFetchOptions = {}): Promis
   const {onDispatch, ...requestInit}=init;
   onDispatch?.();
   const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/competition${path}`, { ...requestInit, headers });
-  if (response.status === 401) await getSupabaseClient().auth.refreshSession();
+  if (response.status === 401) await refreshSession();
   return response;
 }

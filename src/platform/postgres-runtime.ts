@@ -5,9 +5,9 @@ export function transactionIsolation(scope:string){
   if(scope.startsWith('snapshot:'))return 'repeatable read read only';
   return scope.startsWith('room:')||scope.startsWith('broadcast:')?'read committed':'serializable';
 }
-export function postgresTransactions(connectionString:string,options:{ssl?:'require'|false;queryDelayMs?:number}={}):TransactionRunner {
+export function postgresTransactions(connectionString:string,options:{ssl?:'require'|false;queryDelayMs?:number;idleTimeoutSeconds?:number}={}):TransactionRunner {
   // Transaction-mode Supavisor does not support prepared statements.
-  const sql=postgres(connectionString,{prepare:false,max:1,ssl:options.ssl??'require',idle_timeout:1,connect_timeout:10});
+  const sql=postgres(connectionString,{prepare:false,max:1,ssl:options.ssl??'require',idle_timeout:options.idleTimeoutSeconds??1,connect_timeout:10});
   return async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>,metrics?:TransactionMetrics):Promise<T>=>{
     for(let attempt=0;;attempt++){
       // SERIALIZABLE snapshots taken by the lock SELECT would predate waiting.
@@ -40,6 +40,7 @@ export function postgresTransactions(connectionString:string,options:{ssl?:'requ
       }) as T;}catch(error){
         if(error instanceof Response)return error as T;
         if(attempt<4&&['40001','40P01'].includes((error as {code?:string}).code??'')){
+          if(metrics)metrics.retryCount=(metrics.retryCount??0)+1;
           await new Promise(resolve=>setTimeout(resolve,25*2**attempt+Math.floor(Math.random()*50)));
           continue;
         }

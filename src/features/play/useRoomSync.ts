@@ -1,7 +1,8 @@
 import { useRoomRealtime, type RoomTopics, type RoomEvent } from '../../web/realtime';
-import { pollInterval, retryPollDelay } from '../../web/realtime-policy';
+import { pollInterval } from '../../web/realtime-policy';
 import { apiFetch, type ApiFetchOptions } from '../../web/api';
 import { coalesceRequest } from '../../web/coalesce-request';
+import {createRoomSyncScheduler} from '../../web/room-sync-scheduler';
 "use client";
 
 import { createContext, createElement, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -116,45 +117,37 @@ function useOwnedRoomSync(roomId: string, token?: string | null) {
     return { next, sample: { sentAt, receivedAt: actualReceivedAt, serverNow: next.serverNow, serverTiming:next.serverTiming } satisfies ClockSample };
   }), [roomId, token]);
 
-  const eventRefresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const resync = useCallback(() => {
-    if (eventRefresh.current || stopped.current) return;
-    eventRefresh.current = setTimeout(() => {
-      eventRefresh.current = undefined;
-      void sync(true).catch(() => {});
-    }, 100);
-  }, [sync]);
-  const lastHostRefresh = useRef(0);
-  const hostRefresh = useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
-  const onEvent = useCallback((_event: RoomEvent, kind: 'control' | 'host') => {
-    if (kind === 'control') { resync(); return; }
-    if(hostRefresh.current)return;
-    const delay=Math.max(0,2000-(Date.now()-lastHostRefresh.current));
-    hostRefresh.current=setTimeout(()=>{hostRefresh.current=undefined;lastHostRefresh.current=Date.now();resync();},delay);
-  }, [resync]);
-  useEffect(()=>()=>{if(hostRefresh.current)clearTimeout(hostRefresh.current);},[roomId,token]);
+  const schedulerRef = useRef<ReturnType<typeof createRoomSyncScheduler<Awaited<ReturnType<typeof sync>>>> | null>(null);
+  const resync = useCallback(() => { if (!stopped.current) schedulerRef.current?.request('control'); }, []);
+  const onEvent = useCallback((_event:RoomEvent,kind:'control'|'host')=>{if(!stopped.current)schedulerRef.current?.request(kind);},[]);
   const realtimeConnected = useRoomRealtime(data?.realtime, !!data && !['FINISHED','CANCELLED','EXPIRED'].includes(data.room.state), onEvent, resync);
   const realtimeStatus = useRef(false);
   realtimeStatus.current = realtimeConnected;
-  useEffect(() => () => { if (eventRefresh.current) clearTimeout(eventRefresh.current); }, []);
 
   const syncThree = useCallback(async () => {
     const samples: ClockSample[] = [];
-    for (let index = 0; index < 3; index += 1) samples.push((await sync()).sample);
+    let latest!:Awaited<ReturnType<typeof sync>>;
+    for (let index = 0; index < 3; index += 1) {latest=await sync();samples.push(latest.sample);}
     clockRef.current?.synchronizeBest(samples);
+    return latest;
   }, [sync]);
 
-  const pollingPhase = data?.room.state ?? 'WAITING';
   useEffect(() => {
-    let active = true; let timer = 0; let failures = 0; let retryAfter: number | null = null;
-    // Only take extra clock samples once a start time exists, not at every join.
-    let sampleClock = pollingPhase === 'COUNTDOWN';
-    const run = async () => { try { if (sampleClock) { sampleClock = false; await syncThree(); } else await sync(); failures = 0; retryAfter = null; } catch (reason) { failures += 1; retryAfter = (reason as {retryAfterMs?:number}).retryAfterMs ?? null; if (active) { setConnected(false); setError(reason instanceof Error ? reason.message : "再接続しています"); } } finally { if (active && !stopped.current) timer = window.setTimeout(run, retryPollDelay(pollInterval(latestData.current?.realtime?.role ?? (token ? "participant" : "teacher"), latestData.current?.room.state ?? "WAITING", realtimeStatus.current, document.hidden), failures, retryAfter)); } };
-    void run();
-    const visibility = () => { if (!document.hidden && !stopped.current) { clockRef.current?.requireResync(); void (clockRef.current ? syncThree() : sync()).catch(() => {}); } };
-    document.addEventListener("visibilitychange", visibility);
-    return () => { active = false; clearTimeout(timer); document.removeEventListener("visibilitychange", visibility); };
-  }, [sync, syncThree, pollingPhase]);
+    let sampleClock = false;let sampledStart:number|null=null;
+    const scheduler=createRoomSyncScheduler({
+      run:async()=>{if(stopped.current)throw new Error('この参加資格は使用できません');
+        if(sampleClock){sampleClock=false;sampledStart=latestData.current?.room.startAtMs??null;return syncThree();}
+        const result=await sync();
+        if(result.next.room.state==='COUNTDOWN'&&result.next.room.startAtMs!==sampledStart){sampleClock=true;schedulerRef.current?.request('control');}
+        return result;},
+      delay:()=>pollInterval(latestData.current?.realtime?.role??(token?'participant':'teacher'),latestData.current?.room.state??'WAITING',realtimeStatus.current,document.hidden),
+      onError:reason=>{setConnected(false);setError(reason instanceof Error?reason.message:'再接続しています');if(stopped.current)scheduler.stop();},
+    });
+    schedulerRef.current=scheduler;scheduler.start();
+    const visibility=()=>{if(!document.hidden&&!stopped.current){clockRef.current?.requireResync();sampleClock=!!clockRef.current;scheduler.request('resume');}};
+    document.addEventListener('visibilitychange',visibility);
+    return ()=>{scheduler.stop();if(schedulerRef.current===scheduler)schedulerRef.current=null;document.removeEventListener('visibilitychange',visibility);};
+  }, [sync, syncThree]);
   useEffect(() => {
     if (!data || ['FINISHED','CANCELLED','EXPIRED'].includes(data.room.state)) return;
     const now = clockRef.current?.serverNowMs(performance.now()) ?? data.serverNow;
@@ -164,7 +157,7 @@ function useOwnedRoomSync(roomId: string, token?: string | null) {
     const timer = setTimeout(resync, Math.max(0, boundary-now+50));
     return () => clearTimeout(timer);
   }, [data?.room.state, data?.room.startAtMs, data?.room.deadlineAtMs, data?.v2?.cutoffAtMs, data?.v2?.collectionUntilMs, resync]);
-  const refresh = useCallback(() => sync(true), [sync]);
+  const refresh = useCallback(() => schedulerRef.current?.refresh()??Promise.reject(new Error('同期を準備しています')), []);
   return { data, error, connected, removed, terminalError, refresh, clockRef };
 }
 

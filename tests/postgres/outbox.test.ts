@@ -14,7 +14,7 @@ beforeAll(async()=>{
  await pg.exec(`CREATE ROLE authenticated;CREATE ROLE anon;CREATE SCHEMA auth;CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  CREATE SCHEMA realtime;CREATE TABLE realtime.messages(extension text);ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;CREATE FUNCTION realtime.topic() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('request.topic',true) $$;`);
  await pg.exec(readFileSync('supabase/migrations/202610010002_auth_realtime.sql','utf8'));
- await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8'));
+ await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610050001_maintenance.sql','utf8'));
 });
 afterAll(async()=>pg.close());
 it('commits minimal events and removes each successfully delivered outbox record',async()=>{
@@ -101,4 +101,14 @@ it('does not lease a replacement written between candidate read and conditional 
  expect(delivered).toEqual(['host.progress']);
  const row=(await pg.query('SELECT event_id,lease_until_ms FROM app_outbox WHERE event_id=$1',[replacement])).rows[0];
  expect(row).toEqual({event_id:replacement,lease_until_ms:0});
+});
+it('reports a deferred notification wake-up instead of relying on another API request',async()=>{
+ const settings={questionCount:5,timeLimitMinutes:3,mode:'ion',difficulty:'normal',ionAnswer:'formula',compoundPrompts:{formula:true,name:false},compoundAnswer:'formula',gradingMode:'immediate'};
+ const created=await gateway(new Request('https://p.supabase.co/functions/v1/competition/api/class-rooms',{method:'POST',headers:{origin:'https://koichem.github.io','content-type':'application/json','x-competition-csrf':'1'},body:JSON.stringify({requestId:crypto.randomUUID(),settings})}));
+ const {room}=await created.json();const future=now+50000;
+ await pg.query('UPDATE app_broadcast_budget SET window_ms=$1,used=90 WHERE id=1',[Math.floor(future/1000)*1000]);
+ const delivered:string[]=[];const pending=await flushRoomEvents(transact,room.id,async(_topic,event)=>{delivered.push(event)},future);
+ expect(delivered).toHaveLength(0);expect(pending?.nextEligibleAt).toBe(Math.floor(future/1000)*1000+1000);
+ const completed=await flushRoomEvents(transact,room.id,async(_topic,event)=>{delivered.push(event)},Math.floor(future/1000)*1000+1001);
+ expect(delivered).toHaveLength(2);expect(completed?.nextEligibleAt).toBeNull();
 });

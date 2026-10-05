@@ -10,8 +10,15 @@ export function googleIdentity(user: VerifiedUser): TeacherIdentity | null {
 export async function verifySupabaseUser(request: Request, url: string, key: string): Promise<VerifiedUser | null> {
   const authorization = request.headers.get('authorization');
   if (!authorization?.startsWith('Bearer ')) return null;
-  const response = await fetch(`${url}/auth/v1/user`, { headers: { authorization, apikey: key }, signal: AbortSignal.timeout(5000) });
-  if (!response.ok) return null;
-  const user = await response.json() as VerifiedUser;
-  return typeof user.id === 'string' && user.id ? user : null;
+  try {
+    const response = await fetch(`${url}/auth/v1/user`, { headers: { authorization, apikey: key }, signal: AbortSignal.timeout(5000) });
+    if (response.status === 401) return null;
+    if (!response.ok) throw new Error('Authentication service unavailable');
+    const user = await response.json() as VerifiedUser;
+    if (typeof user.id !== 'string' || !user.id) throw new Error('Authentication service unavailable');
+    return user;
+  } catch { throw new AuthenticationUnavailableError(); }
+}
+export class AuthenticationUnavailableError extends Error {
+  constructor(){super('Authentication service unavailable');this.name='AuthenticationUnavailableError';}
 }

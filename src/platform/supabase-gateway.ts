@@ -3,12 +3,16 @@ import { hashParticipantToken } from './participant-auth';
 import { googleIdentity, type VerifiedUser } from './supabase-identity';
 import type { PersistenceDatabase } from '../persistence/db';
 import { queueRoomEvents, roomFingerprint } from './realtime-outbox';
+import {readSnapshotRoom,snapshotNeedsTransition} from './room-snapshot';
 
-export type TransactionMetrics = {poolWaitMs:number;roomLockWaitMs:number;dbWorkMs:number;queryCount:number};
+export type TransactionMetrics = {poolWaitMs:number;roomLockWaitMs:number;dbWorkMs:number;queryCount:number;retryCount?:number};
 export type TransactionRunner = <T>(scope: string, run: (db: PersistenceDatabase) => Promise<T>, metrics?:TransactionMetrics) => Promise<T>;
 export type GatewayOptions = {
   transact: TransactionRunner;
   inspect?: TransactionRunner;
+  read?: TransactionRunner;
+  snapshotReads?: boolean;
+  metricSampleRate?: number;
   verifyUser(request: Request): Promise<VerifiedUser | null>;
   masterEmail: string;
   allowedOrigins: readonly string[];
@@ -110,9 +114,9 @@ export function createSupabaseGateway(options:GatewayOptions) {
     if(!(realtime?['GET']:route!.method).includes(incoming.method))return withCors(failure(405,'method_not_allowed','操作方法を確認してください'),origin);
     const requestId=crypto.randomUUID();
     const metrics:TransactionMetrics={poolWaitMs:0,roomLockWaitMs:0,dbWorkMs:0,queryCount:0};
-    let authMs=0;
+    let authMs=0;let quotaMs=0;
     const finish=(response:Response)=>{response.headers.set('x-request-id',requestId);
-      if(route?.name==='startRoom'||!response.ok)console.info(JSON.stringify({event:'api_request',requestId,route:match?.[2]??path,totalMs:Date.now()-wallStarted,authMs,...metrics,responseStatus:response.status}));
+      if(route?.name==='startRoom'||!response.ok||Math.random()<(options.metricSampleRate??.02))console.info(JSON.stringify({event:'api_request',requestId,route:match?.[2]??path,totalMs:Date.now()-wallStarted,authMs,quotaMs,...metrics,responseStatus:response.status}));
       return withCors(response,origin);};
     try {
       const authStarted=Date.now();
@@ -128,9 +132,11 @@ export function createSupabaseGateway(options:GatewayOptions) {
       const scope=path.startsWith('/api/teacher/')?'teacher-configuration':(publicId?`room:${publicId}`:`creation:${user.id}`);
       const inspect=options.inspect??options.transact;
       const now=(options.now??Date.now)();
-      const limit=await inspect(`quota:${user.id}`,async db=>db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
+      const quotaStarted=Date.now();
+      const limit=await inspect(`quota:${route?.name==='startStatus'?'critical:':''}${user.id}`,async db=>db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
         ON CONFLICT(bucket) DO UPDATE SET count=app_request_limits.count+1 RETURNING count`)
         .bind(`${user.id}:${Math.floor(now/60000)}`,now).first<{count:number}>(),metrics);
+      quotaMs=Date.now()-quotaStarted;
       if((limit?.count??0)>180){const limited=failure(429,'rate_limited','通信が集中しています。少し待って再試行してください');limited.headers.set('retry-after',String(Math.ceil((60000-now%60000)/1000)));return finish(limited);}
       if(route?.name==='startStatus'){
         const response=await inspect(`snapshot:${publicId}`,async db=>{
@@ -147,11 +153,36 @@ export function createSupabaseGateway(options:GatewayOptions) {
         },metrics);
         return finish(response);
       }
+      if(options.snapshotReads!==false&&(realtime||route?.name==='state'||route?.name==='manifest')){
+        const snapshot=await (options.read??inspect)(`snapshot:${publicId}`,async db=>{
+          const room=await readSnapshotRoom(db,publicId,user.id,participant);
+          if(!room)return failure(404,'not_found','ルームが見つかりません');
+          // Only a legitimate credential can enter the command recovery path.
+          if(participant&&room.participant_id&&room.participant_status!=='REMOVED'&&room.membership_uid!==user.id)return null;
+          const provider=await teacherProvider(db,user,options.masterEmail,true);
+          if(!participant&&googleIdentity(user)&&!(await provider.getVerifiedIdentity()))return null;
+          const handlers=createApiHandlers({database:db,teacherIdentity:provider,serverConfig:{teacherAllowedEmails:[],masterTeacherEmail:options.masterEmail.trim().toLowerCase()},now:options.now??Date.now,random:Math.random,randomUUID:()=>crypto.randomUUID(),snapshotRoom:room,
+            ...(participant&&room.participant_id&&(!request.headers.has('x-participant-id')||request.headers.get('x-participant-id')===room.participant_id)?{snapshotParticipant:{participantId:room.participant_id,tokenHash:room.token_hash,status:room.participant_status,nickname:room.participant_nickname}}:{})});
+          const result=await handlers[route?.name==='manifest'?'manifest':'state'](request,{id:publicId});
+          if(!result.ok)return result;
+          if(route?.name!=='manifest'&&snapshotNeedsTransition(room,(options.now??Date.now)()))return null;
+          const body=await result.json();
+          const identity=await provider.getVerifiedIdentity();
+          const owner=identity?.id===room.owner_teacher_id;
+          const member=room.participant_id&&room.membership_uid===user.id&&room.participant_status!=='REMOVED';
+          const topics=room.topic_epoch!=null&&room.expires_at_ms>(options.now??Date.now)()&&(owner||member)?{
+            control:`room:${publicId}:control:${room.topic_epoch}`,host:owner||room.participant_id===room.mate_host_id?`room:${publicId}:host:${room.topic_epoch}`:null,
+            epoch:room.topic_epoch,role:owner?'teacher':room.participant_id===room.mate_host_id?'host':'participant'}:null;
+          if(realtime)return topics?jsonResponse(topics):failure(403,'not_authorized','通知を購読する権限がありません');
+          return jsonResponse({...body,...(route?.name==='state'?{...(topics?{realtime:topics}:{}),serverTiming:{receivedAtMs,sentAtMs:(options.now??Date.now)()}}:{})});
+        },metrics);
+        if(snapshot)return finish(snapshot);
+      }
       const response=await options.transact(scope,async db=>{
         const now=(options.now??Date.now)();
         const provider=await teacherProvider(db,user,options.masterEmail);
         const handlers=createApiHandlers({database:db,teacherIdentity:provider,serverConfig:{teacherAllowedEmails:[],masterTeacherEmail:options.masterEmail.trim().toLowerCase()},now:options.now??Date.now,random:()=>crypto.getRandomValues(new Uint32Array(1))[0]/0x100000000,randomUUID:()=>crypto.randomUUID()});
-        const includeProgress=route?.name!=='state'&&!realtime;
+        const includeProgress=route?.name!=='state'&&route?.name!=='ready'&&!realtime;
         const before=publicId?await roomFingerprint(db,publicId,includeProgress):null;
         const result=await (handlers[realtime?'state':route!.name] as (r:Request,p:{id:string})=>Promise<Response>)(request.clone(),{id:publicId});
         if(!result.ok)return result;
@@ -162,7 +193,7 @@ export function createSupabaseGateway(options:GatewayOptions) {
           if(room){
             if(incoming.method!=='GET')await db.prepare('INSERT OR IGNORE INTO app_room_topics(room_id) VALUES(?)').bind(room.id).run();
             await associateParticipant(db,user,request,publicId);
-            await queueRoomEvents(db,publicId,before,now,includeProgress);
+            await queueRoomEvents(db,publicId,before,now,includeProgress,route?.name==='ready');
           }
           const topics=realtime||route?.name==='state'?await topicsFor(db,user,publicId,now):null;
           if(realtime)return topics?jsonResponse(topics):failure(403,'not_authorized','通知を購読する権限がありません');
@@ -178,7 +209,8 @@ export function createSupabaseGateway(options:GatewayOptions) {
     } catch(error) {
       console.error(JSON.stringify({event:'gateway_failed',category:error instanceof Error?error.name:'Unknown',code:typeof (error as {code?:unknown})?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined}));
       const code=(error as {code?:string}).code;
-      return finish(failure(503,code==='55P03'?'database_busy':code==='57014'?'database_timeout':error instanceof Error&&error.name==='TimeoutError'?'authentication_timeout':'service_unavailable','サービスを利用できません。再試行してください'));
+      const unavailable=failure(503,code==='55P03'?'database_busy':code==='57014'?'database_timeout':error instanceof Error&&['TimeoutError','AuthenticationUnavailableError'].includes(error.name)?'authentication_unavailable':'service_unavailable','サービスを利用できません。再試行してください');
+      unavailable.headers.set('retry-after','2');return finish(unavailable);
     }
   };
 }

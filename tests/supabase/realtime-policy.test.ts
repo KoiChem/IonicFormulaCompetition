@@ -17,3 +17,7 @@ it('keeps safety confirmation for teacher and faster fallback for disconnected p
   expect(pollInterval('participant','RUNNING',true,false)).toBe(30000);
   expect(pollInterval('participant','RUNNING',false,false)).toBe(5000);
 });
+it('recovers a missed start notification even while the channel remains subscribed',()=>{
+ expect(pollInterval('participant','WAITING',true,false)).toBeLessThanOrEqual(4500);
+ expect(pollInterval('participant','PREPARING',true,false)).toBeLessThanOrEqual(2500);
+});

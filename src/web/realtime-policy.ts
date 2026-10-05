@@ -12,5 +12,7 @@ export function acceptEvent(current:{epoch:number;revision:number},next:{epoch:n
 export function pollInterval(role:string,state:string,subscribed:boolean,hidden:boolean){
   if(hidden)return 30000;
   if(role==='teacher'||role==='host')return ['PREPARING','COUNTDOWN','RUNNING','COLLECTING'].includes(state)?2000:5000;
+  if(state==='WAITING')return 4500;
+  if(state==='PREPARING')return 2500;
   return subscribed?30000:5000;
 }

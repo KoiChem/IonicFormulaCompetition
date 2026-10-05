@@ -18,7 +18,7 @@ beforeAll(async()=>{
  CREATE SCHEMA realtime; CREATE TABLE realtime.messages(extension text); ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
  CREATE FUNCTION realtime.topic() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('request.topic',true) $$;`);
  await pg.exec(readFileSync('supabase/migrations/202610010002_auth_realtime.sql','utf8'));
- await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8'));
+ await pg.exec(readFileSync('supabase/migrations/202610010003_permissions_maintenance.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610020001_question_profiles.sql','utf8')); await pg.exec(readFileSync('supabase/migrations/202610050001_maintenance.sql','utf8'));
 });
 afterAll(async()=>pg.close());
 it('rejects untrusted origins and anonymous teacher impersonation',async()=>{
@@ -83,5 +83,46 @@ it('reads a missing or committed start receipt without room mutation or notifica
  const body=await status.json();expect(body.room.state).toBe('PREPARING');expect(body.receipt.preparationGeneration).toBe(1);expect(writes).toBe(0);
  currentUser={id:'44444444-4444-4444-8444-444444444444',is_anonymous:true};
  expect((await checked(req(`/api/rooms/${room.id}/start-status?requestId=${requestId}`))).status).toBe(401);
+ currentUser=master;
+});
+it('serves settled state and manifest through read-only snapshots without notification work',async()=>{
+ currentUser=master;
+ let reads=0;let writes=0;let flushes=0;
+ const read=async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>)=>pg.transaction(tx=>run(new PostgresDatabase(async(q,v)=>{
+  expect(scope.startsWith('snapshot:')).toBe(true);reads++;
+  if(!/^SELECT\b/i.test(q.trim())){writes++;throw new Error('snapshot attempted write');}
+  return tx.query(q,v);
+ })));
+ const checked=createSupabaseGateway({transact,read,verifyUser:async()=>currentUser,masterEmail:master.email,allowedOrigins:[origin],flush:async()=>{flushes++}});
+ const settings={questionCount:5,timeLimitMinutes:3,mode:'ion',difficulty:'normal',ionAnswer:'formula',compoundPrompts:{formula:true,name:false},compoundAnswer:'formula',gradingMode:'immediate'};
+ const {room}=await(await checked(req('/api/class-rooms',{requestId:crypto.randomUUID(),settings}))).json();
+ const token='C'.repeat(43);currentUser={id:crypto.randomUUID(),is_anonymous:true};
+ expect((await checked(req(`/api/rooms/${room.id}/join`,{requestId:crypto.randomUUID(),nickname:'snapshot'},token))).status).toBe(201);
+ const before=flushes;const snapshot=await checked(req(`/api/rooms/${room.id}/state`,undefined,token));
+ expect(snapshot.status,await snapshot.clone().text()).toBe(200);expect(reads).toBeGreaterThan(0);expect(writes).toBe(0);expect(flushes).toBe(before);
+ const own=await snapshot.json();expect(own.participant.nickname).toBe('snapshot');
+ currentUser=master;expect((await checked(req(`/api/rooms/${room.id}/start`,{requestId:crypto.randomUUID(),expectedRevision:own.room.revision}))).status).toBe(200);
+ currentUser={id:crypto.randomUUID(),is_anonymous:true};
+ // A valid recovery token still rebinds on a short command before reading.
+ const recovered=await checked(req(`/api/rooms/${room.id}/state`,undefined,token));expect(recovered.status).toBe(200);
+ const settled=flushes;const manifest=await checked(req(`/api/rooms/${room.id}/manifest`,undefined,token));
+ expect(manifest.status,await manifest.clone().text()).toBe(200);expect(flushes).toBe(settled);expect(writes).toBe(0);
+ currentUser=master;
+});
+it('retains deadline finalization and rejects a mismatched participant claim on snapshots',async()=>{
+ currentUser=master;let now=Date.now();
+ const checked=createSupabaseGateway({transact,verifyUser:async()=>currentUser,masterEmail:master.email,allowedOrigins:[origin],now:()=>now,flush:async()=>{}});
+ const settings={questionCount:5,timeLimitMinutes:3,mode:'ion',difficulty:'normal',ionAnswer:'formula',compoundPrompts:{formula:true,name:false},compoundAnswer:'formula',gradingMode:'immediate'};
+ const {room}=await(await checked(req('/api/class-rooms',{requestId:crypto.randomUUID(),settings}))).json();
+ const token='D'.repeat(43);const student={id:crypto.randomUUID(),is_anonymous:true};currentUser=student;
+ await checked(req(`/api/rooms/${room.id}/join`,{requestId:crypto.randomUUID(),nickname:'deadline'},token));
+ const forged=req(`/api/rooms/${room.id}/state`,undefined,token);forged.headers.set('x-participant-id','someone-else');
+ expect((await checked(forged)).status).toBe(403);
+ const own=await(await checked(req(`/api/rooms/${room.id}/state`,undefined,token))).json();
+ currentUser=master;await checked(req(`/api/rooms/${room.id}/start`,{requestId:crypto.randomUUID(),expectedRevision:own.room.revision}));
+ currentUser=student;const manifest=await(await checked(req(`/api/rooms/${room.id}/manifest`,undefined,token))).json();
+ const ready=await(await checked(req(`/api/rooms/${room.id}/ready`,{manifestId:manifest.manifestId,preparationGeneration:manifest.preparationGeneration,evaluatorVersion:manifest.evaluatorVersion},token))).json();
+ now=ready.deadlineAtMs+10001;
+ const final=await checked(req(`/api/rooms/${room.id}/state`,undefined,token));expect(final.status,await final.clone().text()).toBe(200);expect((await final.json()).room.state).toBe('FINISHED');
  currentUser=master;
 });

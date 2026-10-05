@@ -93,7 +93,7 @@ function transactionIsolation(scope) {
   return scope.startsWith("room:") || scope.startsWith("broadcast:") ? "read committed" : "serializable";
 }
 function postgresTransactions(connectionString, options = {}) {
-  const sql = postgres(connectionString, { prepare: false, max: 1, ssl: options.ssl ?? "require", idle_timeout: 1, connect_timeout: 10 });
+  const sql = postgres(connectionString, { prepare: false, max: 1, ssl: options.ssl ?? "require", idle_timeout: options.idleTimeoutSeconds ?? 1, connect_timeout: 10 });
   return async (scope, run, metrics) => {
     for (let attempt = 0; ; attempt++) {
       const queuedAt = Date.now();
@@ -129,6 +129,7 @@ function postgresTransactions(connectionString, options = {}) {
       } catch (error) {
         if (error instanceof Response) return error;
         if (attempt < 4 && ["40001", "40P01"].includes(error.code ?? "")) {
+          if (metrics) metrics.retryCount = (metrics.retryCount ?? 0) + 1;
           await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt + Math.floor(Math.random() * 50)));
           continue;
         }
@@ -6514,7 +6515,9 @@ async function markV2Ready(db, input) {
   const participantCount = Number(counts?.participant_count ?? 0);
   const readyCount = Number(counts?.ready_count ?? 0);
   const decisionAtMs = input.clock?.() ?? input.nowMs;
+  let attemptedCountdown = false;
   if (participantCount && readyCount === participantCount && room.state === "PREPARING" && decisionAtMs < room.prepared_at_ms + 3e4) {
+    attemptedCountdown = true;
     const startAtMs = decisionAtMs + PUBLIC_CONFIG.countdownSeconds * 1e3;
     const timeLimit = JSON.parse(room.settings_json).timeLimitMinutes * 6e4;
     const marker = commandMarker("v2-ready", `${input.roomId}:${input.preparationGeneration}`);
@@ -6544,8 +6547,8 @@ async function markV2Ready(db, input) {
       WHERE room_id = ? AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND last_command_id = ?)`).bind(input.roomId, input.roomId, input.roomId, marker)
     ]);
   }
-  const latest = await db.prepare(`SELECT m.state, r.start_at_ms, r.deadline_at_ms
-    FROM rooms r JOIN v2_room_manifests m ON m.room_id = r.id WHERE r.id = ?`).bind(input.roomId).first();
+  const latest = attemptedCountdown ? await db.prepare(`SELECT m.state, r.start_at_ms, r.deadline_at_ms
+    FROM rooms r JOIN v2_room_manifests m ON m.room_id = r.id WHERE r.id = ?`).bind(input.roomId).first() : room;
   return {
     state: latest?.state ?? room.state,
     readyCount,
@@ -7919,7 +7922,7 @@ function createApiHandlers(dependencies) {
     });
   });
   const manifest = (request, parameters) => safe(async () => {
-    const room = await loadRoom2(dependencies.database, parameters.id);
+    const room = dependencies.snapshotRoom ?? await loadRoom2(dependencies.database, parameters.id);
     requireUnexpired(room, dependencies.now());
     if (room.game_version !== "2") throw new ApiError(404, "not_found", "\u554F\u984C\u306E\u6E96\u5099\u60C5\u5831\u304C\u3042\u308A\u307E\u305B\u3093");
     const participant = await requireParticipant(dependencies.database, request, room.id);
@@ -8126,16 +8129,18 @@ function createApiHandlers(dependencies) {
     return jsonResponse(result);
   });
   const state = (request, parameters) => safe(async () => {
-    let room = await loadRoom2(dependencies.database, parameters.id);
+    let room = dependencies.snapshotRoom ?? await loadRoom2(dependencies.database, parameters.id);
     const nowMs = dependencies.now();
     if (room.expires_at_ms <= nowMs) {
-      await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
+      if (!dependencies.snapshotRoom) await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
       throw new ApiError(410, "expired", "\u3053\u306E\u30EB\u30FC\u30E0\u306E\u95B2\u89A7\u671F\u9650\u306F\u7D42\u4E86\u3057\u307E\u3057\u305F");
     }
-    await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
+    if (!dependencies.snapshotRoom) await cleanupExpired(dependencies.database, { nowMs, limit: LAZY_CLEANUP_LIMIT });
     requireUnexpired(room, nowMs);
-    await tryFinalize(dependencies.database, room, nowMs);
-    room = await loadRoom2(dependencies.database, room.id);
+    if (!dependencies.snapshotRoom) {
+      await tryFinalize(dependencies.database, room, nowMs);
+      room = await loadRoom2(dependencies.database, room.id);
+    }
     const v2Phase = room.game_version === "2" ? await loadV2RoomPhase(dependencies.database, room.id, nowMs) : null;
     const v2Preparation = v2Phase?.state === "PREPARING" ? (await dependencies.database.prepare(`SELECT p.nickname, v.ready_generation FROM participants p
           LEFT JOIN v2_participant_progress v ON v.room_id = p.room_id AND v.participant_id = p.id
@@ -8147,7 +8152,7 @@ function createApiHandlers(dependencies) {
       notReadyNicknames: v2Preparation?.filter((p) => p.ready_generation !== v2Phase.preparationGeneration).map((p) => p.nickname) ?? []
     } : void 0;
     if (request.headers.has("authorization")) {
-      const identity = await identifyParticipant(dependencies.database, request, room.id);
+      const identity = dependencies.snapshotParticipant ?? await identifyParticipant(dependencies.database, request, room.id);
       if (identity.status === "REMOVED") {
         const roomState = stateOf(room, nowMs);
         return jsonResponse({ error: {
@@ -8370,11 +8375,23 @@ function googleIdentity(user) {
 async function verifySupabaseUser(request, url2, key2) {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
-  const response = await fetch(`${url2}/auth/v1/user`, { headers: { authorization, apikey: key2 }, signal: AbortSignal.timeout(5e3) });
-  if (!response.ok) return null;
-  const user = await response.json();
-  return typeof user.id === "string" && user.id ? user : null;
+  try {
+    const response = await fetch(`${url2}/auth/v1/user`, { headers: { authorization, apikey: key2 }, signal: AbortSignal.timeout(5e3) });
+    if (response.status === 401) return null;
+    if (!response.ok) throw new Error("Authentication service unavailable");
+    const user = await response.json();
+    if (typeof user.id !== "string" || !user.id) throw new Error("Authentication service unavailable");
+    return user;
+  } catch {
+    throw new AuthenticationUnavailableError();
+  }
 }
+var AuthenticationUnavailableError = class extends Error {
+  constructor() {
+    super("Authentication service unavailable");
+    this.name = "AuthenticationUnavailableError";
+  }
+};
 
 // src/web/realtime-policy.ts
 var reservedEventCost = (people) => 1 + people * 2;
@@ -8392,51 +8409,71 @@ async function readParticipants(db, id) {
     FROM participants p LEFT JOIN v2_participant_progress v ON v.room_id=p.room_id AND v.participant_id=p.id
     WHERE p.room_id=? ORDER BY p.joined_order,p.id`).bind(id).all()).results;
 }
-async function roomFingerprint(db, publicId, includeProgress = true) {
-  const r = await readRoom(db, publicId);
-  if (!r) return null;
+async function fingerprint(db, r, includeProgress) {
   const participants = includeProgress ? await readParticipants(db, r.id) : [];
   return {
     control: JSON.stringify([r.state, r.manifest_state, r.preparation_generation, r.settings_json, r.start_at_ms, r.deadline_at_ms, r.cutoff_at_ms, r.collection_until_ms, r.epoch]),
     progress: JSON.stringify(participants.map((p) => [p.id, p.nickname, p.status, p.ready_generation, p.correct_count, p.answered_count, p.revision, p.finished_elapsed_ms]))
   };
 }
-async function queueRoomEvents(db, publicId, before, now, includeProgress = true) {
-  const next = await roomFingerprint(db, publicId, includeProgress);
+async function roomFingerprint(db, publicId, includeProgress = true) {
+  const r = await readRoom(db, publicId);
+  return r ? fingerprint(db, r, includeProgress) : null;
+}
+async function queueRoomEvents(db, publicId, before, now, includeProgress = true, forceHost = false) {
   const room = await readRoom(db, publicId);
-  if (!room || !next) return;
+  if (!room) return;
+  const next = await fingerprint(db, room, includeProgress);
   const kinds = [];
   if (!before || before.control !== next.control) kinds.push("control");
-  if (!before || before.progress !== next.progress) kinds.push("host");
+  if (forceHost || !before || before.progress !== next.progress) kinds.push("host");
   if (!kinds.length) return;
   const topic = await db.prepare("UPDATE app_room_topics SET progress_revision=progress_revision+1,control_revision=control_revision+1 WHERE room_id=? RETURNING epoch,progress_revision,control_revision").bind(room.id).first();
   if (!topic) return;
   for (const kind of kinds) {
     const event = { eventId: crypto.randomUUID(), roomId: publicId, epoch: topic.epoch, revision: kind === "host" ? topic.progress_revision : topic.control_revision, roomRevision: room.revision };
     await db.prepare(`INSERT INTO app_outbox(room_id,kind,revision,payload_json,event_id) VALUES(?,?,?,?,?)
-      ON CONFLICT(room_id,kind) DO UPDATE SET revision=excluded.revision,payload_json=excluded.payload_json,event_id=excluded.event_id,lease_id=NULL,lease_until_ms=0`).bind(room.id, kind, event.revision, JSON.stringify(event), event.eventId).run();
+      ON CONFLICT(room_id,kind) DO UPDATE SET revision=excluded.revision,payload_json=excluded.payload_json,event_id=excluded.event_id,lease_id=NULL,lease_until_ms=0,queued_at_ms=excluded.queued_at_ms`).bind(room.id, kind, event.revision, JSON.stringify(event), event.eventId).run();
   }
 }
 async function flushRoomEvents(transact2, publicId, send, now = Date.now()) {
+  let nextEligibleAt = null;
+  const defer = (at) => {
+    nextEligibleAt = Math.min(nextEligibleAt ?? Infinity, at);
+  };
   const claimStarted = Date.now();
   const claimed = await transact2(`broadcast:${publicId}`, async (db) => {
     const room = await readRoom(db, publicId);
     if (!room || room.expires_at_ms <= now) return [];
     const topic = await db.prepare("SELECT epoch,sent_control_ms,sent_progress_ms FROM app_room_topics WHERE room_id=?").bind(room.id).first();
-    const pending = (await db.prepare(`SELECT * FROM app_outbox WHERE room_id=? AND lease_until_ms<? ORDER BY CASE kind WHEN 'control' THEN 0 ELSE 1 END`).bind(room.id, now).all()).results;
+    const pending = (await db.prepare(`SELECT * FROM app_outbox WHERE room_id=? ORDER BY CASE kind WHEN 'control' THEN 0 ELSE 1 END`).bind(room.id).all()).results;
     const recipients = await db.prepare(`SELECT count(*) AS count FROM participants WHERE room_id=? AND status<>'REMOVED'`).bind(room.id).first();
     const hosts = 1;
     const result = [];
     for (const event of pending) {
-      if (now - (event.kind === "host" ? topic.sent_progress_ms : topic.sent_control_ms) < 1e3) continue;
+      if (event.lease_until_ms >= now) {
+        defer(Number(event.lease_until_ms) + 1);
+        continue;
+      }
+      const eligible = Number(event.kind === "host" ? topic.sent_progress_ms : topic.sent_control_ms) + 1e3;
+      if (now < eligible) {
+        defer(eligible);
+        continue;
+      }
       const cost = reservedEventCost(event.kind === "host" ? hosts : Number(recipients?.count ?? 0) + (room.kind === "mate" ? 0 : 1));
       const budget = await db.prepare("SELECT window_ms,used FROM app_broadcast_budget WHERE id=1 FOR UPDATE").first();
       const window = Math.floor(now / 1e3) * 1e3;
       const used = budget.window_ms === window ? budget.used : 0;
-      if (used + cost > 90) continue;
+      if (used + cost > 90) {
+        defer(window + 1e3);
+        continue;
+      }
       const lease = crypto.randomUUID();
       const leased = await db.prepare("UPDATE app_outbox SET lease_id=?,lease_until_ms=? WHERE room_id=? AND kind=? AND event_id=? AND lease_until_ms<? RETURNING *").bind(lease, now + 5e3, room.id, event.kind, event.event_id, now).first();
-      if (!leased) continue;
+      if (!leased) {
+        defer(now + 1e3);
+        continue;
+      }
       await db.prepare("UPDATE app_broadcast_budget SET window_ms=?,used=? WHERE id=1").bind(window, used + cost).run();
       result.push({ ...leased, lease, topic: `room:${publicId}:${event.kind === "host" ? "host" : "control"}:${topic.epoch}`, epoch: topic.epoch });
     }
@@ -8448,10 +8485,12 @@ async function flushRoomEvents(transact2, publicId, send, now = Date.now()) {
     let ackMs = 0;
     try {
       const stored = JSON.parse(event.payload_json);
-      if (stored.epoch !== event.epoch) continue;
       const payload = { eventId: event.event_id, roomId: publicId, epoch: event.epoch, revision: Number(event.revision), roomRevision: Number(stored.roomRevision) };
       const current = await transact2(`broadcast:${publicId}`, (db) => db.prepare("SELECT epoch FROM app_room_topics WHERE room_id=?").bind(event.room_id).first());
-      if (current?.epoch !== event.epoch) continue;
+      if (stored.epoch !== event.epoch || current?.epoch !== event.epoch) {
+        await transact2(`broadcast:${publicId}`, (db) => db.prepare("DELETE FROM app_outbox WHERE room_id=? AND kind=? AND event_id=? AND lease_id=?").bind(event.room_id, event.kind, event.event_id, event.lease).run());
+        continue;
+      }
       const sendingAt = Date.now();
       await send(event.topic, event.kind === "host" ? "host.progress" : "room.changed", payload);
       sendMs = Date.now() - sendingAt;
@@ -8459,15 +8498,27 @@ async function flushRoomEvents(transact2, publicId, send, now = Date.now()) {
       await transact2(`broadcast:${publicId}`, async (db) => {
         const removed = await db.prepare("DELETE FROM app_outbox WHERE room_id=? AND kind=? AND event_id=? AND lease_id=? RETURNING event_id").bind(event.room_id, event.kind, event.event_id, event.lease).first();
         if (removed) await db.prepare(`UPDATE app_room_topics SET ${event.kind === "host" ? "sent_progress_ms" : "sent_control_ms"}=? WHERE room_id=? AND epoch=?`).bind(now, event.room_id, event.epoch).run();
+        else defer(now + 1e3);
       });
       ackMs = Date.now() - ackAt;
       console.info(JSON.stringify({ event: "broadcast_delivery", claimMs, sendMs, ackMs, outcome: "sent" }));
     } catch {
+      defer(now + 1e3);
       console.info(JSON.stringify({ event: "broadcast_delivery", claimMs, sendMs, ackMs, outcome: "failed" }));
       await transact2(`broadcast:${publicId}`, async (db) => {
         await db.prepare("UPDATE app_outbox SET lease_until_ms=0 WHERE room_id=? AND kind=? AND event_id=? AND lease_id=?").bind(event.room_id, event.kind, event.event_id, event.lease).run();
       });
     }
+  }
+  return { nextEligibleAt };
+}
+async function retryRoomDrain(drain, options = {}) {
+  const clock = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  for (let attempt = 0; attempt < (options.attempts ?? 8); attempt++) {
+    const result = await drain();
+    if (result.nextEligibleAt == null) return;
+    await sleep(Math.min(5e3, Math.max(100, result.nextEligibleAt - clock() + 25)));
   }
 }
 function coalescedRoomFlusher(drain) {
@@ -8492,6 +8543,32 @@ function coalescedRoomFlusher(drain) {
     })();
     return entry.promise;
   };
+}
+
+// src/platform/room-snapshot.ts
+async function readSnapshotRoom(db, publicId, uid, credential) {
+  const token = credential ? /^Bearer ([A-Za-z0-9_-]{43})$/.exec(credential)?.[1] : void 0;
+  const hash = token ? await hashParticipantToken(token) : "";
+  return db.prepare(`SELECT r.*, v.state AS v2_phase, v.collection_until_ms, t.epoch AS topic_epoch,
+      p.id AS participant_id,p.status AS participant_status,p.nickname AS participant_nickname,p.token_hash,
+      b.uid AS membership_uid,
+      EXISTS(SELECT 1 FROM participants a WHERE a.room_id=r.id AND a.status<>'REMOVED') AND
+      NOT EXISTS(SELECT 1 FROM participants a LEFT JOIN v2_participant_progress g ON g.room_id=a.room_id AND g.participant_id=a.id
+        WHERE a.room_id=r.id AND a.status<>'REMOVED' AND g.finished_elapsed_ms IS NULL) AS all_finished,
+      NOT EXISTS(SELECT 1 FROM participants a LEFT JOIN v2_participant_progress g ON g.room_id=a.room_id AND g.participant_id=a.id
+        WHERE a.room_id=r.id AND a.status<>'REMOVED' AND g.finished_elapsed_ms IS NULL AND g.boundary_ack_at_ms IS NULL) AS boundary_ready
+    FROM rooms r LEFT JOIN v2_room_manifests v ON v.room_id=r.id
+    LEFT JOIN app_room_topics t ON t.room_id=r.id
+    LEFT JOIN participants p ON p.room_id=r.id AND p.token_hash=?
+    LEFT JOIN app_memberships b ON b.room_id=p.room_id AND b.participant_id=p.id
+    WHERE r.public_id=?`).bind(hash, publicId).first();
+}
+function snapshotNeedsTransition(room, now) {
+  if (room.expires_at_ms <= now || ["CANCELLED", "EXPIRED", "FINISHED"].includes(room.state)) return false;
+  if (room.game_version !== "2") return room.deadline_at_ms != null && now >= room.deadline_at_ms;
+  if (room.v2_phase === "COUNTDOWN") return room.all_finished || room.deadline_at_ms != null && now >= room.deadline_at_ms;
+  if (room.v2_phase === "COLLECTING") return room.boundary_ready || now >= (room.collection_until_ms ?? (room.deadline_at_ms ?? Infinity) + 1e4);
+  return false;
 }
 
 // src/platform/supabase-gateway.ts
@@ -8600,9 +8677,10 @@ function createSupabaseGateway(options) {
     const requestId2 = crypto.randomUUID();
     const metrics = { poolWaitMs: 0, roomLockWaitMs: 0, dbWorkMs: 0, queryCount: 0 };
     let authMs = 0;
+    let quotaMs = 0;
     const finish = (response) => {
       response.headers.set("x-request-id", requestId2);
-      if (route?.name === "startRoom" || !response.ok) console.info(JSON.stringify({ event: "api_request", requestId: requestId2, route: match?.[2] ?? path, totalMs: Date.now() - wallStarted, authMs, ...metrics, responseStatus: response.status }));
+      if (route?.name === "startRoom" || !response.ok || Math.random() < (options.metricSampleRate ?? 0.02)) console.info(JSON.stringify({ event: "api_request", requestId: requestId2, route: match?.[2] ?? path, totalMs: Date.now() - wallStarted, authMs, quotaMs, ...metrics, responseStatus: response.status }));
       return withCors(response, origin);
     };
     try {
@@ -8621,8 +8699,10 @@ function createSupabaseGateway(options) {
       const scope = path.startsWith("/api/teacher/") ? "teacher-configuration" : publicId ? `room:${publicId}` : `creation:${user.id}`;
       const inspect2 = options.inspect ?? options.transact;
       const now = (options.now ?? Date.now)();
-      const limit = await inspect2(`quota:${user.id}`, async (db) => db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
+      const quotaStarted = Date.now();
+      const limit = await inspect2(`quota:${route?.name === "startStatus" ? "critical:" : ""}${user.id}`, async (db) => db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
         ON CONFLICT(bucket) DO UPDATE SET count=app_request_limits.count+1 RETURNING count`).bind(`${user.id}:${Math.floor(now / 6e4)}`, now).first(), metrics);
+      quotaMs = Date.now() - quotaStarted;
       if ((limit?.count ?? 0) > 180) {
         const limited = failure(429, "rate_limited", "\u901A\u4FE1\u304C\u96C6\u4E2D\u3057\u3066\u3044\u307E\u3059\u3002\u5C11\u3057\u5F85\u3063\u3066\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044");
         limited.headers.set("retry-after", String(Math.ceil((6e4 - now % 6e4) / 1e3)));
@@ -8643,11 +8723,46 @@ function createSupabaseGateway(options) {
         }, metrics);
         return finish(response2);
       }
+      if (options.snapshotReads !== false && (realtime || route?.name === "state" || route?.name === "manifest")) {
+        const snapshot = await (options.read ?? inspect2)(`snapshot:${publicId}`, async (db) => {
+          const room = await readSnapshotRoom(db, publicId, user.id, participant);
+          if (!room) return failure(404, "not_found", "\u30EB\u30FC\u30E0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+          if (participant && room.participant_id && room.participant_status !== "REMOVED" && room.membership_uid !== user.id) return null;
+          const provider = await teacherProvider(db, user, options.masterEmail, true);
+          if (!participant && googleIdentity(user) && !await provider.getVerifiedIdentity()) return null;
+          const handlers = createApiHandlers({
+            database: db,
+            teacherIdentity: provider,
+            serverConfig: { teacherAllowedEmails: [], masterTeacherEmail: options.masterEmail.trim().toLowerCase() },
+            now: options.now ?? Date.now,
+            random: Math.random,
+            randomUUID: () => crypto.randomUUID(),
+            snapshotRoom: room,
+            ...participant && room.participant_id && (!request.headers.has("x-participant-id") || request.headers.get("x-participant-id") === room.participant_id) ? { snapshotParticipant: { participantId: room.participant_id, tokenHash: room.token_hash, status: room.participant_status, nickname: room.participant_nickname } } : {}
+          });
+          const result = await handlers[route?.name === "manifest" ? "manifest" : "state"](request, { id: publicId });
+          if (!result.ok) return result;
+          if (route?.name !== "manifest" && snapshotNeedsTransition(room, (options.now ?? Date.now)())) return null;
+          const body = await result.json();
+          const identity = await provider.getVerifiedIdentity();
+          const owner = identity?.id === room.owner_teacher_id;
+          const member = room.participant_id && room.membership_uid === user.id && room.participant_status !== "REMOVED";
+          const topics = room.topic_epoch != null && room.expires_at_ms > (options.now ?? Date.now)() && (owner || member) ? {
+            control: `room:${publicId}:control:${room.topic_epoch}`,
+            host: owner || room.participant_id === room.mate_host_id ? `room:${publicId}:host:${room.topic_epoch}` : null,
+            epoch: room.topic_epoch,
+            role: owner ? "teacher" : room.participant_id === room.mate_host_id ? "host" : "participant"
+          } : null;
+          if (realtime) return topics ? jsonResponse(topics) : failure(403, "not_authorized", "\u901A\u77E5\u3092\u8CFC\u8AAD\u3059\u308B\u6A29\u9650\u304C\u3042\u308A\u307E\u305B\u3093");
+          return jsonResponse({ ...body, ...route?.name === "state" ? { ...topics ? { realtime: topics } : {}, serverTiming: { receivedAtMs, sentAtMs: (options.now ?? Date.now)() } } : {} });
+        }, metrics);
+        if (snapshot) return finish(snapshot);
+      }
       const response = await options.transact(scope, async (db) => {
         const now2 = (options.now ?? Date.now)();
         const provider = await teacherProvider(db, user, options.masterEmail);
         const handlers = createApiHandlers({ database: db, teacherIdentity: provider, serverConfig: { teacherAllowedEmails: [], masterTeacherEmail: options.masterEmail.trim().toLowerCase() }, now: options.now ?? Date.now, random: () => crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296, randomUUID: () => crypto.randomUUID() });
-        const includeProgress = route?.name !== "state" && !realtime;
+        const includeProgress = route?.name !== "state" && route?.name !== "ready" && !realtime;
         const before = publicId ? await roomFingerprint(db, publicId, includeProgress) : null;
         const result = await handlers[realtime ? "state" : route.name](request.clone(), { id: publicId });
         if (!result.ok) return result;
@@ -8658,7 +8773,7 @@ function createSupabaseGateway(options) {
           if (room) {
             if (incoming.method !== "GET") await db.prepare("INSERT OR IGNORE INTO app_room_topics(room_id) VALUES(?)").bind(room.id).run();
             await associateParticipant(db, user, request, publicId);
-            await queueRoomEvents(db, publicId, before, now2, includeProgress);
+            await queueRoomEvents(db, publicId, before, now2, includeProgress, route?.name === "ready");
           }
           const topics = realtime || route?.name === "state" ? await topicsFor(db, user, publicId, now2) : null;
           if (realtime) return topics ? jsonResponse(topics) : failure(403, "not_authorized", "\u901A\u77E5\u3092\u8CFC\u8AAD\u3059\u308B\u6A29\u9650\u304C\u3042\u308A\u307E\u305B\u3093");
@@ -8673,7 +8788,73 @@ function createSupabaseGateway(options) {
     } catch (error) {
       console.error(JSON.stringify({ event: "gateway_failed", category: error instanceof Error ? error.name : "Unknown", code: typeof error?.code === "string" && /^[A-Z0-9]{5}$/.test(error.code) ? error.code : void 0 }));
       const code = error.code;
-      return finish(failure(503, code === "55P03" ? "database_busy" : code === "57014" ? "database_timeout" : error instanceof Error && error.name === "TimeoutError" ? "authentication_timeout" : "service_unavailable", "\u30B5\u30FC\u30D3\u30B9\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044"));
+      const unavailable = failure(503, code === "55P03" ? "database_busy" : code === "57014" ? "database_timeout" : error instanceof Error && ["TimeoutError", "AuthenticationUnavailableError"].includes(error.name) ? "authentication_unavailable" : "service_unavailable", "\u30B5\u30FC\u30D3\u30B9\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093\u3002\u518D\u8A66\u884C\u3057\u3066\u304F\u3060\u3055\u3044");
+      unavailable.headers.set("retry-after", "2");
+      return finish(unavailable);
+    }
+  };
+}
+
+// src/platform/priority-transactions.ts
+function priorityTransactions(run, limit = 256) {
+  const queue = [];
+  let active = false;
+  let criticalStreak = 0;
+  const pump = () => {
+    if (active || !queue.length) return;
+    active = true;
+    const preferred = queue.findIndex((x) => x.priority === (criticalStreak >= 8 ? 1 : 0));
+    const entry = queue.splice(preferred < 0 ? 0 : preferred, 1)[0];
+    criticalStreak = entry.priority === 0 ? criticalStreak + 1 : 0;
+    void entry.start().finally(() => {
+      active = false;
+      pump();
+    });
+  };
+  return (scope, work, metrics) => new Promise((resolve, reject) => {
+    if (queue.length >= limit) {
+      reject(new Error("Critical request queue full"));
+      return;
+    }
+    const queued = Date.now();
+    queue.push({ priority: scope.startsWith("snapshot:") || scope.startsWith("quota:critical:") ? 0 : 1, start: async () => {
+      if (metrics) metrics.poolWaitMs += Date.now() - queued;
+      try {
+        resolve(await run(scope, work, metrics));
+      } catch (error) {
+        reject(error);
+      }
+    } });
+    pump();
+  });
+}
+
+// src/platform/maintenance.ts
+function createMaintenanceHandler(options) {
+  return async (request) => {
+    if (request.method !== "POST") return Response.json({ error: { code: "method_not_allowed" } }, { status: 405 });
+    if (!options.secret) return Response.json({ error: { code: "maintenance_unavailable" } }, { status: 503 });
+    if (request.headers.get("authorization") !== `Bearer ${options.secret}`) return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+    const clock = options.now ?? Date.now;
+    const now = clock();
+    try {
+      const pending = await options.transact("maintenance", async (db) => {
+        const lease = await db.prepare("UPDATE app_maintenance SET lease_until_ms=?,last_attempt_ms=? WHERE id=1 AND lease_until_ms<? RETURNING id").bind(now + 55e3, now, now).first();
+        if (!lease) return null;
+        await cleanupExpired(db, { nowMs: now, limit: 40 });
+        await db.prepare("SELECT app_prune_auxiliary()").run();
+        const rooms = (await db.prepare(`SELECT r.public_id,r.id AS room_id FROM app_outbox o JOIN rooms r ON r.id=o.room_id
+      WHERE r.expires_at_ms>? GROUP BY r.public_id,r.id ORDER BY MIN(o.maintenance_attempt_ms),MIN(o.queued_at_ms),r.public_id LIMIT 8`).bind(now).all()).results;
+        if (rooms.length) await db.prepare(`UPDATE app_outbox SET maintenance_attempt_ms=? WHERE room_id IN (${rooms.map(() => "?").join(",")})`).bind(now, ...rooms.map((r) => r.room_id)).run();
+        return rooms;
+      });
+      if (!pending) return Response.json({ skipped: true }, { status: 202 });
+      await Promise.all(pending.map((room) => options.flush(room.public_id)));
+      await options.transact("maintenance", (db) => db.prepare("UPDATE app_maintenance SET last_success_ms=? WHERE id=1 AND last_attempt_ms=?").bind(clock(), now).run());
+      return Response.json({ checkedRooms: pending.length });
+    } catch {
+      console.error(JSON.stringify({ event: "maintenance_failed" }));
+      return Response.json({ error: { code: "maintenance_unavailable" } }, { status: 503 });
     }
   };
 }
@@ -8815,9 +8996,10 @@ var databaseUrl = Deno.env.get("COMPETITION_DATABASE_URL") ?? transactionPoolerU
   "aws-0-ap-northeast-2.pooler.supabase.com"
 );
 var transact = postgresTransactions(databaseUrl);
-var inspect = postgresTransactions(databaseUrl);
+var inspect = priorityTransactions(postgresTransactions(databaseUrl));
+var read = postgresTransactions(databaseUrl);
 var flush = coalescedRoomFlusher(async (publicId) => {
-  await flushRoomEvents(transact, publicId, async (topic, event, payload) => {
+  await retryRoomDrain(() => flushRoomEvents(transact, publicId, async (topic, event, payload) => {
     const result = await fetch(`${url}/realtime/v1/api/broadcast`, {
       method: "POST",
       headers: { authorization: `Bearer ${serviceKey}`, apikey: serviceKey, "content-type": "application/json" },
@@ -8825,11 +9007,13 @@ var flush = coalescedRoomFlusher(async (publicId) => {
       signal: AbortSignal.timeout(3e3)
     });
     if (!result.ok) throw new Error("Broadcast delivery failed");
-  });
+  }));
 });
 var gateway = createSupabaseGateway({
   transact,
   inspect,
+  read,
+  snapshotReads: Deno.env.get("COMPETITION_SNAPSHOT_READS") !== "false",
   verifyUser: (request) => verifySupabaseUser(request, url, key),
   masterEmail: required("MASTER_TEACHER_EMAIL"),
   allowedOrigins: required("ALLOWED_ORIGINS").split(",").map((x) => x.trim()).filter(Boolean),
@@ -8837,13 +9021,7 @@ var gateway = createSupabaseGateway({
     EdgeRuntime.waitUntil(flush(id));
   }
 });
-var nextMaintenanceAt = 0;
-function maintain() {
-  if (Date.now() < nextMaintenanceAt || Math.random() >= 0.02) return;
-  nextMaintenanceAt = Date.now() + 6e4;
-  EdgeRuntime.waitUntil(transact("maintenance", (db) => db.prepare("SELECT app_prune_auxiliary()").run()).catch(() => {
-  }));
-}
+var maintenance = createMaintenanceHandler({ transact, flush, secret: Deno.env.get("COMPETITION_MAINTENANCE_KEY") });
 var store = sharedTeacherStore(transact, required("MASTER_TEACHER_EMAIL").trim().toLowerCase());
 var authority = createSharedTeacherAuthority({
   now: Date.now,
@@ -8860,7 +9038,6 @@ var authority = createSharedTeacherAuthority({
   mutateAllowlist: store.mutateAllowlist
 });
 Deno.serve(async (request) => {
-  const response = await (new URL(request.url).pathname.endsWith("/shared-teacher") ? authority(request) : gateway(request));
-  maintain();
-  return response;
+  const path = new URL(request.url).pathname;
+  return path.endsWith("/maintenance") ? maintenance(request) : path.endsWith("/shared-teacher") ? authority(request) : gateway(request);
 });
