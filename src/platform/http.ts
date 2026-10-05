@@ -191,10 +191,11 @@ function publicError(error: unknown): { status: number; code: string; message: s
   return { status: 503, code: "service_unavailable", message: "サービスを利用できません" };
 }
 
-async function safe(handler: () => Promise<Response>): Promise<Response> {
+export async function safe(handler: () => Promise<Response>, propagateSqlErrors=false): Promise<Response> {
   try {
     return await handler();
   } catch (error) {
+    if(propagateSqlErrors&&typeof (error as {code?:unknown})?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as {code:string}).code))throw error;
     const mapped = publicError(error);
     if (mapped.status >= 500 || error instanceof TypeError || error instanceof RangeError) {
       // No error messages or bound data: only failure type and source frames.
@@ -246,7 +247,7 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function readMutationBody(request: Request, maxBodyBytes = MAX_BODY_BYTES): Promise<ParsedBody> {
+export async function readMutationBody(request: Request, maxBodyBytes = MAX_BODY_BYTES): Promise<ParsedBody> {
   assertSameOriginMutation(request);
   const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
   if (contentType !== "application/json") {
@@ -286,14 +287,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
+export function assertKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
   const allowedSet = new Set(allowed);
   if (Object.keys(value).some((key) => !allowedSet.has(key))) {
     throw new ApiError(400, "invalid_request", "受け付けていない項目があります");
   }
 }
 
-function stringValue(value: unknown, name: string, maximum = 128): string {
+export function stringValue(value: unknown, name: string, maximum = 128): string {
   if (typeof value !== "string" || value.length < 1 || value.length > maximum) {
     throw new ApiError(400, "invalid_request", `${name}が不正です`);
   }
@@ -339,14 +340,14 @@ function formulaEntryValue(value: unknown): FormulaEntry {
   return { tokens: [...value.tokens] as string[], cursor: value.cursor as number, charge };
 }
 
-function integerValue(value: unknown, name: string, minimum = 0): number {
+export function integerValue(value: unknown, name: string, minimum = 0): number {
   if (!Number.isSafeInteger(value) || (value as number) < minimum) {
     throw new ApiError(400, "invalid_request", `${name}が不正です`);
   }
   return value as number;
 }
 
-function requestId(value: unknown): string {
+export function requestId(value: unknown): string {
   const id = stringValue(value, "requestId", 128);
   if (!/^[A-Za-z0-9_-]+$/u.test(id)) throw new ApiError(400, "invalid_request", "requestIdが不正です");
   return id;
@@ -373,7 +374,7 @@ function parseSettings(value: unknown): IonicFormulaGameSettings {
   return settings;
 }
 
-function normalizeNickname(value: unknown): { nickname: string; nicknameKey: string } {
+export function normalizeNickname(value: unknown): { nickname: string; nicknameKey: string } {
   if (typeof value !== "string") throw new ApiError(400, "invalid_nickname", "ニックネームを入力してください");
   const nickname = value.trim();
   const length = Array.from(nickname).length;

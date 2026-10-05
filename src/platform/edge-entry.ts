@@ -25,7 +25,7 @@ const flush=coalescedRoomFlusher(async(publicId:string)=>{
     if(!result.ok)throw new Error('Broadcast delivery failed');
   }));
 });
-const gateway=createSupabaseGateway({transact,inspect,read,snapshotReads:Deno.env.get('COMPETITION_SNAPSHOT_READS')!=='false',verifyUser:request=>verifySupabaseUser(request,url,key),masterEmail:required('MASTER_TEACHER_EMAIL'),
+const gateway=createSupabaseGateway({transact,inspect,read,nativeJoin:Deno.env.get('COMPETITION_NATIVE_JOIN')==='true',nativeReady:Deno.env.get('COMPETITION_NATIVE_READY')==='true',snapshotReads:Deno.env.get('COMPETITION_SNAPSHOT_READS')!=='false',verifyUser:request=>verifySupabaseUser(request,url,key),masterEmail:required('MASTER_TEACHER_EMAIL'),
   allowedOrigins:required('ALLOWED_ORIGINS').split(',').map(x=>x.trim()).filter(Boolean),flush:async id=>{EdgeRuntime.waitUntil(flush(id));}});
 // Keep auxiliary retention cleanup outside foreground requests and room locks.
 const maintenance=createMaintenanceHandler({transact,flush,secret:Deno.env.get('COMPETITION_MAINTENANCE_KEY')});

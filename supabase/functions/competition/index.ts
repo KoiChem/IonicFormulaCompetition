@@ -139,6 +139,47 @@ function postgresTransactions(connectionString, options = {}) {
   };
 }
 
+// src/persistence/db.ts
+var PersistenceConflictError = class extends Error {
+  constructor(code, message, status = 409, retryAfterSeconds) {
+    super(message);
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.name = "PersistenceConflictError";
+    this.status = status;
+  }
+  status;
+};
+async function loadCommandReceipt(database, roomId, actorId, requestId2, bodyHash2) {
+  const receipt2 = await database.prepare(
+    `SELECT c.body_hash, c.result_json
+     FROM command_receipts c JOIN rooms r ON r.id = c.room_id
+     WHERE c.room_id = ? AND c.actor_id = ? AND c.request_id = ?
+       AND c.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+       AND r.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)`
+  ).bind(roomId, actorId, requestId2).first();
+  if (!receipt2) return null;
+  if (receipt2.body_hash !== bodyHash2) {
+    throw new PersistenceConflictError("request_id_reused", "requestId was already used with another payload");
+  }
+  return JSON.parse(receipt2.result_json);
+}
+function json(value) {
+  return JSON.stringify(value);
+}
+function commandMarker(actorId, requestId2) {
+  return `${actorId}:${requestId2}:${crypto.randomUUID()}`;
+}
+function changed(result) {
+  return Number(result?.meta.changes ?? 0) > 0;
+}
+function isRetryableDatabaseConflict(error) {
+  if (typeof error !== "object" || error === null) return false;
+  const value = error;
+  if (value.code === "SQLITE_BUSY" || value.code === "SQLITE_LOCKED") return true;
+  return typeof value.message === "string" && /(?:database.*(?:busy|locked)|D1_ERROR.*conflict)/i.test(value.message);
+}
+
 // src/games/ionic-formula/data/ions.json
 var ions_default = [
   {
@@ -4495,47 +4536,6 @@ function validateQuestionProfileShape(raw) {
   return structuredClone(p);
 }
 
-// src/persistence/db.ts
-var PersistenceConflictError = class extends Error {
-  constructor(code, message, status = 409, retryAfterSeconds) {
-    super(message);
-    this.code = code;
-    this.retryAfterSeconds = retryAfterSeconds;
-    this.name = "PersistenceConflictError";
-    this.status = status;
-  }
-  status;
-};
-async function loadCommandReceipt(database, roomId, actorId, requestId2, bodyHash2) {
-  const receipt2 = await database.prepare(
-    `SELECT c.body_hash, c.result_json
-     FROM command_receipts c JOIN rooms r ON r.id = c.room_id
-     WHERE c.room_id = ? AND c.actor_id = ? AND c.request_id = ?
-       AND c.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)
-       AND r.expires_at_ms > CAST(unixepoch('subsec') * 1000 AS INTEGER)`
-  ).bind(roomId, actorId, requestId2).first();
-  if (!receipt2) return null;
-  if (receipt2.body_hash !== bodyHash2) {
-    throw new PersistenceConflictError("request_id_reused", "requestId was already used with another payload");
-  }
-  return JSON.parse(receipt2.result_json);
-}
-function json(value) {
-  return JSON.stringify(value);
-}
-function commandMarker(actorId, requestId2) {
-  return `${actorId}:${requestId2}:${crypto.randomUUID()}`;
-}
-function changed(result) {
-  return Number(result?.meta.changes ?? 0) > 0;
-}
-function isRetryableDatabaseConflict(error) {
-  if (typeof error !== "object" || error === null) return false;
-  const value = error;
-  if (value.code === "SQLITE_BUSY" || value.code === "SQLITE_LOCKED") return true;
-  return typeof value.message === "string" && /(?:database.*(?:busy|locked)|D1_ERROR.*conflict)/i.test(value.message);
-}
-
 // src/persistence/question-profiles.ts
 async function readQuestionProfile(database) {
   const row = await database.prepare("SELECT profile_json, revision FROM question_profiles WHERE id = 1").first();
@@ -7194,10 +7194,11 @@ function publicError(error) {
   }
   return { status: 503, code: "service_unavailable", message: "\u30B5\u30FC\u30D3\u30B9\u3092\u5229\u7528\u3067\u304D\u307E\u305B\u3093" };
 }
-async function safe(handler) {
+async function safe(handler, propagateSqlErrors = false) {
   try {
     return await handler();
   } catch (error) {
+    if (propagateSqlErrors && typeof error?.code === "string" && /^[A-Z0-9]{5}$/.test(error.code)) throw error;
     const mapped = publicError(error);
     if (mapped.status >= 500 || error instanceof TypeError || error instanceof RangeError) {
       const candidate = error;
@@ -8367,6 +8368,36 @@ function createApiHandlers(dependencies) {
   };
 }
 
+// src/platform/postgres-room-commands.ts
+async function nativeRoomCommand(db, request, publicId, uid, kind) {
+  let unsupported = false;
+  const response = await safe(async () => {
+    const { value, bodyHash: bodyHash2 } = await readMutationBody(request);
+    const tokenHash = await hashParticipantToken(readParticipantBearerToken(request));
+    let row;
+    if (kind === "join") {
+      assertKeys(value, ["requestId", "nickname"]);
+      const nickname = normalizeNickname(value.nickname);
+      row = await db.prepare("SELECT competition_private.join_room_v1(?,?,?,?,?,?,?,?) AS result").bind(publicId, uid, tokenHash, crypto.randomUUID(), requestId(value.requestId), bodyHash2, nickname.nickname, nickname.nicknameKey).first();
+    } else {
+      assertKeys(value, ["manifestId", "preparationGeneration", "evaluatorVersion"]);
+      row = await db.prepare("SELECT competition_private.mark_ready_v1(?,?,?,?,?,?,?) AS result").bind(publicId, uid, tokenHash, request.headers.get("x-participant-id"), stringValue(value.manifestId, "manifestId", 128), stringValue(value.evaluatorVersion, "evaluatorVersion", 128), integerValue(value.preparationGeneration, "preparationGeneration", 1)).first();
+    }
+    const result = row?.result;
+    if (result?.unsupported) {
+      unsupported = true;
+      return jsonResponse({});
+    }
+    if (!result || !result.status) throw new Error("Invalid native command envelope");
+    if (result.code) {
+      if (result.message) return jsonResponse({ error: { code: result.code, message: result.message } }, result.status);
+      throw new PersistenceConflictError(result.code, "Native command rejected", result.status);
+    }
+    return jsonResponse(result.body, result.status);
+  }, true);
+  return unsupported ? null : response;
+}
+
 // src/platform/supabase-identity.ts
 function googleIdentity(user) {
   if (user.is_anonymous || !user.email || !user.email_confirmed_at || !user.identities?.some((x) => x.provider === "google")) return null;
@@ -8604,10 +8635,12 @@ var roomRoutes = {
 function failure(status, code, message) {
   return jsonResponse({ error: { code, message } }, status);
 }
-function withCors(response, origin) {
+function withCors(response, origin, preflight = false) {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", origin);
-  headers.set("vary", "Origin");
+  const vary = headers.get("vary");
+  if (!vary?.split(",").some((value) => value.trim().toLowerCase() === "origin")) headers.set("vary", vary ? `${vary}, Origin` : "Origin");
+  if (preflight) headers.set("access-control-max-age", "600");
   headers.set("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
   headers.set("access-control-allow-headers", "authorization,apikey,content-type,x-region,x-participant-authorization,x-competition-csrf,x-creation-key");
   headers.set("access-control-expose-headers", "retry-after,x-request-id");
@@ -8664,7 +8697,7 @@ function createSupabaseGateway(options) {
     const receivedAtMs = (options.now ?? Date.now)();
     const origin = incoming.headers.get("origin");
     if (!origin || !options.allowedOrigins.includes(origin)) return failure(403, "origin_forbidden", "\u8A31\u53EF\u3055\u308C\u305F\u30A2\u30D7\u30EA\u304B\u3089\u5229\u7528\u3057\u3066\u304F\u3060\u3055\u3044");
-    if (incoming.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), origin);
+    if (incoming.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), origin, true);
     const url2 = new URL(incoming.url);
     const marker = url2.pathname.indexOf("/api/");
     if (marker < 0) return withCors(failure(404, "not_found", "API\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093"), origin);
@@ -8700,7 +8733,7 @@ function createSupabaseGateway(options) {
       const inspect2 = options.inspect ?? options.transact;
       const now = (options.now ?? Date.now)();
       const quotaStarted = Date.now();
-      const limit = await inspect2(`quota:${route?.name === "startStatus" ? "critical:" : ""}${user.id}`, async (db) => db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
+      const limit = await inspect2(`quota:${route?.name === "startStatus" || route?.name === "startRoom" ? "critical:" : ""}${user.id}`, async (db) => db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
         ON CONFLICT(bucket) DO UPDATE SET count=app_request_limits.count+1 RETURNING count`).bind(`${user.id}:${Math.floor(now / 6e4)}`, now).first(), metrics);
       quotaMs = Date.now() - quotaStarted;
       if ((limit?.count ?? 0) > 180) {
@@ -8762,6 +8795,10 @@ function createSupabaseGateway(options) {
         const now2 = (options.now ?? Date.now)();
         const provider = await teacherProvider(db, user, options.masterEmail);
         const handlers = createApiHandlers({ database: db, teacherIdentity: provider, serverConfig: { teacherAllowedEmails: [], masterTeacherEmail: options.masterEmail.trim().toLowerCase() }, now: options.now ?? Date.now, random: () => crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296, randomUUID: () => crypto.randomUUID() });
+        if (route?.name === "joinRoom" && options.nativeJoin || route?.name === "ready" && options.nativeReady) {
+          const native = await nativeRoomCommand(db, request.clone(), publicId, user.id, route.name === "joinRoom" ? "join" : "ready");
+          if (native) return native;
+        }
         const includeProgress = route?.name !== "state" && route?.name !== "ready" && !realtime;
         const before = publicId ? await roomFingerprint(db, publicId, includeProgress) : null;
         const result = await handlers[realtime ? "state" : route.name](request.clone(), { id: publicId });
@@ -9013,6 +9050,8 @@ var gateway = createSupabaseGateway({
   transact,
   inspect,
   read,
+  nativeJoin: Deno.env.get("COMPETITION_NATIVE_JOIN") === "true",
+  nativeReady: Deno.env.get("COMPETITION_NATIVE_READY") === "true",
   snapshotReads: Deno.env.get("COMPETITION_SNAPSHOT_READS") !== "false",
   verifyUser: (request) => verifySupabaseUser(request, url, key),
   masterEmail: required("MASTER_TEACHER_EMAIL"),

@@ -1,3 +1,4 @@
+import {nativeRoomCommand} from './postgres-room-commands';
 import { createApiHandlers, jsonResponse } from './http';
 import { hashParticipantToken } from './participant-auth';
 import { googleIdentity, type VerifiedUser } from './supabase-identity';
@@ -12,6 +13,8 @@ export type GatewayOptions = {
   inspect?: TransactionRunner;
   read?: TransactionRunner;
   snapshotReads?: boolean;
+  nativeJoin?: boolean;
+  nativeReady?: boolean;
   metricSampleRate?: number;
   verifyUser(request: Request): Promise<VerifiedUser | null>;
   masterEmail: string;
@@ -41,9 +44,12 @@ const roomRoutes: Record<string, { method: string[]; name: HandlerName }> = {
   results:{method:['GET'],name:'results'},'result-summary':{method:['GET'],name:'resultSummary'},
 };
 function failure(status:number,code:string,message:string) { return jsonResponse({error:{code,message}},status); }
-function withCors(response: Response, origin: string) {
+function withCors(response: Response, origin: string, preflight=false) {
   const headers=new Headers(response.headers);
-  headers.set('access-control-allow-origin',origin);headers.set('vary','Origin');
+  headers.set('access-control-allow-origin',origin);
+  const vary=headers.get('vary');
+  if(!vary?.split(',').some(value=>value.trim().toLowerCase()==='origin'))headers.set('vary',vary?`${vary}, Origin`:'Origin');
+  if(preflight)headers.set('access-control-max-age','600');
   headers.set('access-control-allow-methods','GET,POST,PATCH,OPTIONS');
   headers.set('access-control-allow-headers','authorization,apikey,content-type,x-region,x-participant-authorization,x-competition-csrf,x-creation-key');
   headers.set('access-control-expose-headers','retry-after,x-request-id');
@@ -104,7 +110,7 @@ export function createSupabaseGateway(options:GatewayOptions) {
     const receivedAtMs=(options.now??Date.now)();
     const origin=incoming.headers.get('origin');
     if(!origin||!options.allowedOrigins.includes(origin))return failure(403,'origin_forbidden','許可されたアプリから利用してください');
-    if(incoming.method==='OPTIONS')return withCors(new Response(null,{status:204}),origin);
+    if(incoming.method==='OPTIONS')return withCors(new Response(null,{status:204}),origin,true);
     const url=new URL(incoming.url);const marker=url.pathname.indexOf('/api/');
     if(marker<0)return withCors(failure(404,'not_found','APIが見つかりません'),origin);
     const path=url.pathname.slice(marker);const match=/^\/api\/rooms\/([A-Za-z0-9_-]{1,128})\/([a-z-]+)$/.exec(path);
@@ -133,7 +139,7 @@ export function createSupabaseGateway(options:GatewayOptions) {
       const inspect=options.inspect??options.transact;
       const now=(options.now??Date.now)();
       const quotaStarted=Date.now();
-      const limit=await inspect(`quota:${route?.name==='startStatus'?'critical:':''}${user.id}`,async db=>db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
+      const limit=await inspect(`quota:${route?.name==='startStatus'||route?.name==='startRoom'?'critical:':''}${user.id}`,async db=>db.prepare(`INSERT INTO app_request_limits(bucket,window_ms,count) VALUES(?,?,1)
         ON CONFLICT(bucket) DO UPDATE SET count=app_request_limits.count+1 RETURNING count`)
         .bind(`${user.id}:${Math.floor(now/60000)}`,now).first<{count:number}>(),metrics);
       quotaMs=Date.now()-quotaStarted;
@@ -182,6 +188,10 @@ export function createSupabaseGateway(options:GatewayOptions) {
         const now=(options.now??Date.now)();
         const provider=await teacherProvider(db,user,options.masterEmail);
         const handlers=createApiHandlers({database:db,teacherIdentity:provider,serverConfig:{teacherAllowedEmails:[],masterTeacherEmail:options.masterEmail.trim().toLowerCase()},now:options.now??Date.now,random:()=>crypto.getRandomValues(new Uint32Array(1))[0]/0x100000000,randomUUID:()=>crypto.randomUUID()});
+        if((route?.name==='joinRoom'&&options.nativeJoin)||(route?.name==='ready'&&options.nativeReady)){
+          const native=await nativeRoomCommand(db,request.clone(),publicId,user.id,route.name==='joinRoom'?'join':'ready');
+          if(native)return native;
+        }
         const includeProgress=route?.name!=='state'&&route?.name!=='ready'&&!realtime;
         const before=publicId?await roomFingerprint(db,publicId,includeProgress):null;
         const result=await (handlers[realtime?'state':route!.name] as (r:Request,p:{id:string})=>Promise<Response>)(request.clone(),{id:publicId});
