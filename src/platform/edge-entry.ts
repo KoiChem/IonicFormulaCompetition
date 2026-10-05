@@ -3,6 +3,8 @@ import { postgresTransactions } from './postgres-runtime';
 import { createSupabaseGateway } from './supabase-gateway';
 import { verifySupabaseUser } from './supabase-identity';
 import { flushRoomEvents } from './realtime-outbox';
+import { createSharedTeacherAuthority } from './shared-teacher-authority';
+import { sharedTeacherStore } from './shared-teacher-store';
 declare const Deno:{env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):void};
 declare const EdgeRuntime:{waitUntil(promise:Promise<unknown>):void};
 const required=(name:string)=>{const value=Deno.env.get(name);if(!value)throw new Error(`Missing backend configuration: ${name}`);return value;};
@@ -21,4 +23,12 @@ async function flush(publicId:string){
 }
 const gateway=createSupabaseGateway({transact,verifyUser:request=>verifySupabaseUser(request,url,key),masterEmail:required('MASTER_TEACHER_EMAIL'),
   allowedOrigins:required('ALLOWED_ORIGINS').split(',').map(x=>x.trim()).filter(Boolean),flush:async id=>{EdgeRuntime.waitUntil(flush(id));}});
-Deno.serve(gateway);
+const store=sharedTeacherStore(transact,required('MASTER_TEACHER_EMAIL').trim().toLowerCase());
+const authority=createSharedTeacherAuthority({
+  now:Date.now,masterEmail:required('MASTER_TEACHER_EMAIL'),
+  lookupRegistry:store.lookupRegistry,readSecret:name=>Deno.env.get(name),claimRequest:store.claimRequest,
+  verifyRemoteUser:(authUrl,publishableKey,bearerToken)=>verifySupabaseUser(
+    new Request(`${authUrl}/auth/v1/user`,{headers:{authorization:`Bearer ${bearerToken}`}}),authUrl,publishableKey),
+  readAllowlist:store.readAllowlist,mutateAllowlist:store.mutateAllowlist,
+});
+Deno.serve(request=>new URL(request.url).pathname.endsWith('/shared-teacher')?authority(request):gateway(request));

@@ -8596,6 +8596,128 @@ function createSupabaseGateway(options) {
   };
 }
 
+// src/platform/shared-teacher-authority.ts
+var encoder = new TextEncoder();
+var JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+function reply(status, body) {
+  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+function hex(bytes) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function validSignature(secret, body, signature) {
+  if (!signature || !/^[a-f0-9]{64}$/.test(signature)) return false;
+  const key2 = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  return crypto.subtle.verify("HMAC", key2, Uint8Array.from(signature.match(/../g), (part) => parseInt(part, 16)), encoder.encode(body));
+}
+async function sha2562(value) {
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
+}
+function validEnvelope(value) {
+  return value && typeof value === "object" && /^[a-z0-9-]{3,64}$/.test(value.appId) && /^[A-Za-z0-9_-]{16,128}$/.test(value.requestId) && Number.isSafeInteger(value.issuedAtMs) && ["authorize", "allowlist.get", "allowlist.mutate"].includes(value.action) && typeof value.bearerToken === "string" && value.bearerToken.length > 0 && value.bearerToken.length <= 8192;
+}
+function validMutation(value) {
+  return value && typeof value === "object" && typeof value.email === "string" && typeof value.enabled === "boolean" && Number.isSafeInteger(value.expectedRevision) && value.expectedRevision >= 0 && typeof value.requestId === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(value.requestId);
+}
+function createSharedTeacherAuthority(options) {
+  return async (request) => {
+    if (request.method !== "POST") return reply(405, { error: { code: "method_not_allowed" } });
+    let body;
+    try {
+      body = await request.text();
+      if (encoder.encode(body).length > 12e3) return reply(413, { error: { code: "body_too_large" } });
+    } catch {
+      return reply(400, { error: { code: "invalid_request" } });
+    }
+    let envelope;
+    try {
+      envelope = JSON.parse(body);
+    } catch {
+      return reply(400, { error: { code: "invalid_request" } });
+    }
+    if (!validEnvelope(envelope)) return reply(400, { error: { code: "invalid_request" } });
+    try {
+      const registry = await options.lookupRegistry(envelope.appId);
+      if (!registry || registry.appId !== envelope.appId || !/^https:\/\/[^/?#]+$/.test(registry.authUrl)) return reply(401, { error: { code: "caller_forbidden" } });
+      const secret = options.readSecret(registry.secretName);
+      if (!secret || secret.length < 32 || !await validSignature(secret, body, request.headers.get("x-shared-teacher-signature"))) return reply(401, { error: { code: "caller_forbidden" } });
+      if (Math.abs(options.now() - envelope.issuedAtMs) > 3e4) return reply(401, { error: { code: "request_expired" } });
+      if (!await options.claimRequest(envelope.appId, envelope.requestId, envelope.issuedAtMs)) return reply(409, { error: { code: "request_replayed" } });
+      const remote = await options.verifyRemoteUser(registry.authUrl, registry.publishableKey, envelope.bearerToken);
+      const identity = remote && googleIdentity(remote);
+      if (!identity) return reply(403, { error: { code: "teacher_forbidden" } });
+      const master = normalizeTeacherEmail(options.masterEmail);
+      if (!master) return reply(503, { error: { code: "authority_unavailable" } });
+      const list = await options.readAllowlist();
+      const isMaster = identity.email === master;
+      const allowed = isMaster || list.emails.includes(identity.email);
+      if (envelope.action === "authorize") return allowed ? reply(200, { allowed: true, master: isMaster, email: identity.email, revision: list.revision }) : reply(403, { error: { code: "teacher_forbidden" } });
+      if (!isMaster) return reply(403, { error: { code: "master_required" } });
+      const view = (value) => ({ masterEmail: master, emails: value.emails, revision: value.revision });
+      if (envelope.action === "allowlist.get") return reply(200, view(list));
+      if (!validMutation(envelope.mutation)) return reply(400, { error: { code: "invalid_request" } });
+      const mutation = { ...envelope.mutation, email: normalizeTeacherEmail(envelope.mutation.email) };
+      if (mutation.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mutation.email)) return reply(400, { error: { code: "invalid_email" } });
+      if (mutation.email === master) return reply(400, { error: { code: "master_fixed" } });
+      const bodyHash2 = await sha2562(JSON.stringify(mutation));
+      if (list.lastOperation?.requestId === mutation.requestId) {
+        return list.lastOperation.bodyHash === bodyHash2 ? reply(200, view(list)) : reply(409, { error: { code: "request_id_reused" } });
+      }
+      if (list.revision !== mutation.expectedRevision) return reply(409, { error: { code: "stale_allowlist" } });
+      if (mutation.enabled && !list.emails.includes(mutation.email) && list.emails.length >= 100) return reply(400, { error: { code: "allowlist_limit" } });
+      if (!await options.mutateAllowlist({ ...mutation, bodyHash: bodyHash2 })) return reply(409, { error: { code: "stale_allowlist" } });
+      return reply(200, view(await options.readAllowlist()));
+    } catch {
+      return reply(503, { error: { code: "authority_unavailable" } });
+    }
+  };
+}
+
+// src/platform/shared-teacher-store.ts
+function sharedTeacherStore(transact2, masterEmail) {
+  return {
+    lookupRegistry: (appId) => transact2(`shared-registry:${appId}`, async (db) => {
+      const row = await db.prepare("SELECT app_id,auth_url,publishable_key,secret_env_name FROM shared_teacher_callers WHERE app_id=? AND enabled=true").bind(appId).first();
+      return row ? { appId: row.app_id, authUrl: row.auth_url, publishableKey: row.publishable_key, secretName: row.secret_env_name } : null;
+    }),
+    claimRequest: (appId, requestId2, issuedAtMs) => transact2(`shared-request:${appId}:${requestId2}`, async (db) => {
+      const row = await db.prepare("INSERT INTO shared_teacher_requests(app_id,request_id,issued_at_ms) VALUES(?,?,?) ON CONFLICT DO NOTHING RETURNING request_id").bind(appId, requestId2, issuedAtMs).first();
+      if (crypto.getRandomValues(new Uint32Array(1))[0] % 200 === 0) {
+        await db.prepare("DELETE FROM shared_teacher_requests WHERE issued_at_ms<?").bind(Date.now() - 12e4).run();
+      }
+      return !!row;
+    }),
+    readAllowlist: () => transact2("shared-allowlist-read", async (db) => {
+      await ensureMasterConfig(db, masterEmail);
+      return readAllowlist(db);
+    }),
+    mutateAllowlist: (value) => transact2("shared-allowlist", async (db) => {
+      await ensureMasterConfig(db, masterEmail);
+      await db.prepare("INSERT INTO teacher_allowlist(id) VALUES(1) ON CONFLICT DO NOTHING").run();
+      const current = await readAllowlist(db);
+      if (current.revision !== value.expectedRevision) return false;
+      const emails = new Set(current.emails);
+      value.enabled ? emails.add(value.email) : emails.delete(value.email);
+      if (emails.size > 100) return false;
+      const updated = await db.prepare("UPDATE teacher_allowlist SET emails_json=?,revision=revision+1,last_request_id=?,last_body_hash=? WHERE id=1 AND revision=? RETURNING revision").bind(JSON.stringify([...emails].sort()), value.requestId, value.bodyHash, value.expectedRevision).first();
+      return !!updated;
+    })
+  };
+}
+async function ensureMasterConfig(db, masterEmail) {
+  await db.prepare("INSERT INTO app_auth_config(id,master_email) VALUES(1,?) ON CONFLICT DO NOTHING").bind(masterEmail).run();
+  const configured = await db.prepare("SELECT master_email FROM app_auth_config WHERE id=1").first();
+  if (configured?.master_email !== masterEmail) throw new Error("Master identity configuration differs");
+}
+async function readAllowlist(db) {
+  const row = await db.prepare("SELECT emails_json,revision,last_request_id,last_body_hash FROM teacher_allowlist WHERE id=1").first();
+  return row ? {
+    emails: JSON.parse(row.emails_json),
+    revision: row.revision,
+    lastOperation: row.last_request_id && row.last_body_hash ? { requestId: row.last_request_id, bodyHash: row.last_body_hash } : null
+  } : { emails: [], revision: 0, lastOperation: null };
+}
+
 // src/platform/edge-entry.ts
 var required = (name) => {
   const value = Deno.env.get(name);
@@ -8631,4 +8753,19 @@ var gateway = createSupabaseGateway({
     EdgeRuntime.waitUntil(flush(id));
   }
 });
-Deno.serve(gateway);
+var store = sharedTeacherStore(transact, required("MASTER_TEACHER_EMAIL").trim().toLowerCase());
+var authority = createSharedTeacherAuthority({
+  now: Date.now,
+  masterEmail: required("MASTER_TEACHER_EMAIL"),
+  lookupRegistry: store.lookupRegistry,
+  readSecret: (name) => Deno.env.get(name),
+  claimRequest: store.claimRequest,
+  verifyRemoteUser: (authUrl, publishableKey, bearerToken) => verifySupabaseUser(
+    new Request(`${authUrl}/auth/v1/user`, { headers: { authorization: `Bearer ${bearerToken}` } }),
+    authUrl,
+    publishableKey
+  ),
+  readAllowlist: store.readAllowlist,
+  mutateAllowlist: store.mutateAllowlist
+});
+Deno.serve((request) => new URL(request.url).pathname.endsWith("/shared-teacher") ? authority(request) : gateway(request));
