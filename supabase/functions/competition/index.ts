@@ -1867,6 +1867,32 @@ var compounds_default = [
     ]
   },
   {
+    id: "lead2_acetate",
+    cation: "lead2",
+    anion: "acetate",
+    formula: "(CH3COO)2Pb",
+    name: "\u9162\u9178\u925B(\u2161)",
+    solidColor: null,
+    solidColorNote: null,
+    difficulty: "hard",
+    enabled: true,
+    questionModes: { nameToFormula: true, formulaToName: true, ionsToFormula: true, ionsToName: true },
+    acceptedFormulaVariants: [{ formula: "Pb(CH3COO)2", note: "\u3053\u306E\u30A2\u30D7\u30EA\u3067\u306F (CH\u2083COO)\u2082Pb \u3092\u63A8\u5968\u8868\u8A18\u3068\u3057\u307E\u3059\u3002" }]
+  },
+  {
+    id: "calcium_acetate",
+    cation: "calcium",
+    anion: "acetate",
+    formula: "(CH3COO)2Ca",
+    name: "\u9162\u9178\u30AB\u30EB\u30B7\u30A6\u30E0",
+    solidColor: null,
+    solidColorNote: null,
+    difficulty: "hard",
+    enabled: true,
+    questionModes: { nameToFormula: true, formulaToName: true, ionsToFormula: true, ionsToName: true },
+    acceptedFormulaVariants: [{ formula: "Ca(CH3COO)2", note: "\u3053\u306E\u30A2\u30D7\u30EA\u3067\u306F (CH\u2083COO)\u2082Ca \u3092\u63A8\u5968\u8868\u8A18\u3068\u3057\u307E\u3059\u3002" }]
+  },
+  {
     id: "lithium_fluoride",
     cation: "lithium",
     anion: "fluoride",

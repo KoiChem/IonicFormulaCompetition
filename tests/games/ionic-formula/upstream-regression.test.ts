@@ -30,9 +30,9 @@ const counts = (values: readonly string[]) => values.reduce<Record<string, numbe
 describe("vendored IonicFormula regression", () => {
   it("retains the verified dataset sizes and key chemistry records", () => {
     expect(ions).toHaveLength(47);
-    expect(compounds).toHaveLength(156);
+    expect(compounds).toHaveLength(158);
     expect(new Set(ions.map((ion) => ion.id)).size).toBe(47);
-    expect(new Set(compounds.map((compound) => compound.id)).size).toBe(156);
+    expect(new Set(compounds.map((compound) => compound.id)).size).toBe(158);
     expect(ions.find((ion) => ion.id === "lithium")).toMatchObject({ formula: "Li", charge: 1, name: "リチウムイオン" });
     expect(ions.find((ion) => ion.id === "nitride")).toMatchObject({ formula: "N", charge: -3 });
     expect(compounds.find((compound) => compound.id === "calcium_nitride")).toMatchObject({ formula: "Ca3N2" });

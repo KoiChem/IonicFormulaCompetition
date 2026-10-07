@@ -1132,6 +1132,32 @@
     ]
   },
   {
+    "id": "lead2_acetate",
+    "cation": "lead2",
+    "anion": "acetate",
+    "formula": "(CH3COO)2Pb",
+    "name": "酢酸鉛(Ⅱ)",
+    "solidColor": null,
+    "solidColorNote": null,
+    "difficulty": "hard",
+    "enabled": true,
+    "questionModes": { "nameToFormula": true, "formulaToName": true, "ionsToFormula": true, "ionsToName": true },
+    "acceptedFormulaVariants": [{ "formula": "Pb(CH3COO)2", "note": "このアプリでは (CH₃COO)₂Pb を推奨表記とします。" }]
+  },
+  {
+    "id": "calcium_acetate",
+    "cation": "calcium",
+    "anion": "acetate",
+    "formula": "(CH3COO)2Ca",
+    "name": "酢酸カルシウム",
+    "solidColor": null,
+    "solidColorNote": null,
+    "difficulty": "hard",
+    "enabled": true,
+    "questionModes": { "nameToFormula": true, "formulaToName": true, "ionsToFormula": true, "ionsToName": true },
+    "acceptedFormulaVariants": [{ "formula": "Ca(CH3COO)2", "note": "このアプリでは (CH₃COO)₂Ca を推奨表記とします。" }]
+  },
+  {
     "id": "lithium_fluoride",
     "cation": "lithium", "anion": "fluoride", "formula": "LiF", "name": "フッ化リチウム",
     "solidColor": null, "solidColorNote": null, "enabled": true,
