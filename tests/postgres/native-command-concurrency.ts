@@ -45,4 +45,16 @@ for(const joinFirst of [false,true]){
  const flush=flushRoomEvents(legacy.command,id,async(_topic,event,payload:any)=>{if(event==='host.progress'){oldEvent=payload.eventId;entered();await gate;}});await sendStarted;await join(id,'通知二');const row=(await sql`SELECT o.event_id,o.lease_id FROM app_outbox o JOIN rooms r ON r.id=o.room_id WHERE r.public_id=${id} AND o.kind='host'`)[0];check(row.event_id!==oldEvent&&row.lease_id===null,'Native upsert did not reset lease');release();await flush;
  const pending=(await sql`SELECT event_id FROM app_outbox o JOIN rooms r ON r.id=o.room_id WHERE r.public_id=${id} AND o.kind='host'`)[0];check(pending?.event_id===row.event_id,'Old ack deleted newer event');let resent=0;await flushRoomEvents(native.command,id,async()=>{resent++},Date.now()+1100);check(resent>0,'New event was not delivered');evidence.outboxReplacement={oldAckPreservedNew:true,resent};
 }
+{
+ const id=await create();
+ const entrants=Array.from({length:43},(_,i)=>{const uid=crypto.randomUUID();users.set(uid,{id:uid,is_anonymous:true});return {uid,token:createParticipantToken(),body:{requestId:crypto.randomUUID(),nickname:'同時'+i}};});
+ const results=await Promise.all(entrants.map((s,i)=>call(i%2?legacy:native,s.uid,`rooms/${id}/join`,s.body,s.token)));
+ check(results.filter(r=>r.status===201).length===42&&results.filter(r=>r.status===409).length===1,'Concurrent capacity exceeded');
+ const rows=await sql`SELECT p.joined_order FROM participants p JOIN rooms r ON r.id=p.room_id WHERE r.public_id=${id}`;
+ check(rows.length===42&&new Set(rows.map(r=>r.joined_order)).size===42,'Duplicate joined order');
+ const index=results.findIndex(r=>r.status===201),s=entrants[index];
+ const replay=await Promise.all([call(native,s.uid,`rooms/${id}/join`,s.body,s.token),call(legacy,s.uid,`rooms/${id}/join`,s.body,s.token)]);
+ check(replay.every(r=>r.status===201&&r.data.participant.id===results[index].data.participant.id),'Concurrent receipt replay differs');
+ evidence.concurrentCapacity={attempts:43,accepted:42,rejected:1,uniqueJoinedOrders:42,parallelReplaySameParticipant:true};
+}
 writeFileSync('/private/tmp/ionic-native-concurrency-result.json',JSON.stringify(evidence,null,2));console.log(evidence);await sql.end();process.exit(0);

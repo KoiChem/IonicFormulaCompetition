@@ -18,7 +18,7 @@
         409
       ],
       "state": "COUNTDOWN",
-      "countdownAfterReleaseMs": 5003
+      "countdownAfterReleaseMs": 5005
     }
   ],
   "joinStart": [
@@ -48,5 +48,12 @@
   "outboxReplacement": {
     "oldAckPreservedNew": true,
     "resent": 1
+  },
+  "concurrentCapacity": {
+    "attempts": 43,
+    "accepted": 42,
+    "rejected": 1,
+    "uniqueJoinedOrders": 42,
+    "parallelReplaySameParticipant": true
   }
 }
