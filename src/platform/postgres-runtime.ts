@@ -5,20 +5,23 @@ export function transactionIsolation(scope:string){
   if(scope.startsWith('snapshot:'))return 'repeatable read read only';
   return scope.startsWith('room:')||scope.startsWith('broadcast:')?'read committed':'serializable';
 }
-export function postgresTransactions(connectionString:string,options:{ssl?:'require'|false;queryDelayMs?:number;idleTimeoutSeconds?:number}={}):TransactionRunner {
+export function postgresTransactions(connectionString:string,options:{ssl?:'require'|false;queryDelayMs?:number;idleTimeoutSeconds?:number;controlDelayMs?:number}={}):TransactionRunner {
   // Transaction-mode Supavisor does not support prepared statements.
   const sql=postgres(connectionString,{prepare:false,max:1,ssl:options.ssl??'require',idle_timeout:options.idleTimeoutSeconds??1,connect_timeout:10});
   return async<T>(scope:string,run:(db:PostgresDatabase)=>Promise<T>,metrics?:TransactionMetrics):Promise<T>=>{
     for(let attempt=0;;attempt++){
       // SERIALIZABLE snapshots taken by the lock SELECT would predate waiting.
       // Room commands instead read fresh statements after their shared mutex.
-      const queuedAt=Date.now();
-      try{return await sql.begin(`isolation level ${transactionIsolation(scope)}`,async tx=>{
+      const queuedAt=Date.now();let began=false;
+      const control=()=>{if(metrics)metrics.controlQueryCount=(metrics.controlQueryCount??0)+1;};
+      const controlDelay=async()=>{if(options.controlDelayMs)await new Promise(resolve=>setTimeout(resolve,options.controlDelayMs));};
+      try{const value=await sql.begin(`isolation level ${transactionIsolation(scope)}`,async tx=>{
+        began=true;control();await controlDelay(); // BEGIN confirmed before entering the callback.
         if(metrics)metrics.poolWaitMs+=Date.now()-queuedAt;
-        await tx.unsafe('SET LOCAL statement_timeout = 9000');
-        await tx.unsafe('SET LOCAL lock_timeout = 7000');
+        control();await controlDelay();await tx.unsafe('SET LOCAL statement_timeout = 9000');
+        control();await controlDelay();await tx.unsafe('SET LOCAL lock_timeout = 7000');
         const lockStarted=Date.now();
-        if(!scope.startsWith('snapshot:')&&!scope.startsWith('quota:'))await tx.unsafe('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);
+        if(!scope.startsWith('snapshot:')&&!scope.startsWith('quota:')){control();await controlDelay();await tx.unsafe('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[scope]);}
         if(metrics)metrics.roomLockWaitMs+=Date.now()-lockStarted;
         const workStarted=Date.now();
         const execute:Query=async(query,values)=>{
@@ -36,8 +39,9 @@ export function postgresTransactions(connectionString:string,options:{ssl?:'requ
         let result:T;
         try{result=await run(new PostgresDatabase(execute));}finally{if(metrics)metrics.dbWorkMs+=Date.now()-workStarted;}
         if(result instanceof Response&&result.status>=500)throw result;
-        return result;
-      }) as T;}catch(error){
+        await controlDelay();return result;
+      }) as T;control();return value;}catch(error){
+        if(began)control(); // sql.begin completed its ROLLBACK before rejecting.
         if(error instanceof Response)return error as T;
         if(attempt<4&&['40001','40P01'].includes((error as {code?:string}).code??'')){
           if(metrics)metrics.retryCount=(metrics.retryCount??0)+1;

@@ -6,7 +6,7 @@ import type { PersistenceDatabase } from '../persistence/db';
 import { queueRoomEvents, roomFingerprint } from './realtime-outbox';
 import {readSnapshotRoom,snapshotNeedsTransition} from './room-snapshot';
 
-export type TransactionMetrics = {poolWaitMs:number;roomLockWaitMs:number;dbWorkMs:number;queryCount:number;retryCount?:number};
+export type TransactionMetrics = {poolWaitMs:number;roomLockWaitMs:number;dbWorkMs:number;queryCount:number;controlQueryCount?:number;commandPath?:'legacy'|'native';retryCount?:number};
 export type TransactionRunner = <T>(scope: string, run: (db: PersistenceDatabase) => Promise<T>, metrics?:TransactionMetrics) => Promise<T>;
 export type GatewayOptions = {
   transact: TransactionRunner;
@@ -119,7 +119,7 @@ export function createSupabaseGateway(options:GatewayOptions) {
     if(!route&&!realtime)return withCors(failure(404,'not_found','APIが見つかりません'),origin);
     if(!(realtime?['GET']:route!.method).includes(incoming.method))return withCors(failure(405,'method_not_allowed','操作方法を確認してください'),origin);
     const requestId=crypto.randomUUID();
-    const metrics:TransactionMetrics={poolWaitMs:0,roomLockWaitMs:0,dbWorkMs:0,queryCount:0};
+    const metrics:TransactionMetrics={poolWaitMs:0,roomLockWaitMs:0,dbWorkMs:0,queryCount:0,controlQueryCount:0,...(route?.name==='joinRoom'||route?.name==='ready'?{commandPath:'legacy' as const}:{})};
     let authMs=0;let quotaMs=0;
     const finish=(response:Response)=>{response.headers.set('x-request-id',requestId);
       if(route?.name==='startRoom'||!response.ok||Math.random()<(options.metricSampleRate??.02))console.info(JSON.stringify({event:'api_request',requestId,route:match?.[2]??path,totalMs:Date.now()-wallStarted,authMs,quotaMs,...metrics,responseStatus:response.status}));
@@ -190,7 +190,7 @@ export function createSupabaseGateway(options:GatewayOptions) {
         const handlers=createApiHandlers({database:db,teacherIdentity:provider,serverConfig:{teacherAllowedEmails:[],masterTeacherEmail:options.masterEmail.trim().toLowerCase()},now:options.now??Date.now,random:()=>crypto.getRandomValues(new Uint32Array(1))[0]/0x100000000,randomUUID:()=>crypto.randomUUID()});
         if((route?.name==='joinRoom'&&options.nativeJoin)||(route?.name==='ready'&&options.nativeReady)){
           const native=await nativeRoomCommand(db,request.clone(),publicId,user.id,route.name==='joinRoom'?'join':'ready');
-          if(native)return native;
+          if(native){metrics.commandPath='native';return native;}
         }
         const includeProgress=route?.name!=='state'&&route?.name!=='ready'&&!realtime;
         const before=publicId?await roomFingerprint(db,publicId,includeProgress):null;

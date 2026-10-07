@@ -97,13 +97,31 @@ function postgresTransactions(connectionString, options = {}) {
   return async (scope, run, metrics) => {
     for (let attempt = 0; ; attempt++) {
       const queuedAt = Date.now();
+      let began = false;
+      const control = () => {
+        if (metrics) metrics.controlQueryCount = (metrics.controlQueryCount ?? 0) + 1;
+      };
+      const controlDelay = async () => {
+        if (options.controlDelayMs) await new Promise((resolve) => setTimeout(resolve, options.controlDelayMs));
+      };
       try {
-        return await sql.begin(`isolation level ${transactionIsolation(scope)}`, async (tx) => {
+        const value = await sql.begin(`isolation level ${transactionIsolation(scope)}`, async (tx) => {
+          began = true;
+          control();
+          await controlDelay();
           if (metrics) metrics.poolWaitMs += Date.now() - queuedAt;
+          control();
+          await controlDelay();
           await tx.unsafe("SET LOCAL statement_timeout = 9000");
+          control();
+          await controlDelay();
           await tx.unsafe("SET LOCAL lock_timeout = 7000");
           const lockStarted = Date.now();
-          if (!scope.startsWith("snapshot:") && !scope.startsWith("quota:")) await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [scope]);
+          if (!scope.startsWith("snapshot:") && !scope.startsWith("quota:")) {
+            control();
+            await controlDelay();
+            await tx.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [scope]);
+          }
           if (metrics) metrics.roomLockWaitMs += Date.now() - lockStarted;
           const workStarted = Date.now();
           const execute = async (query, values) => {
@@ -124,9 +142,13 @@ function postgresTransactions(connectionString, options = {}) {
             if (metrics) metrics.dbWorkMs += Date.now() - workStarted;
           }
           if (result instanceof Response && result.status >= 500) throw result;
+          await controlDelay();
           return result;
         });
+        control();
+        return value;
       } catch (error) {
+        if (began) control();
         if (error instanceof Response) return error;
         if (attempt < 4 && ["40001", "40P01"].includes(error.code ?? "")) {
           if (metrics) metrics.retryCount = (metrics.retryCount ?? 0) + 1;
@@ -8708,7 +8730,7 @@ function createSupabaseGateway(options) {
     if (!route && !realtime) return withCors(failure(404, "not_found", "API\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093"), origin);
     if (!(realtime ? ["GET"] : route.method).includes(incoming.method)) return withCors(failure(405, "method_not_allowed", "\u64CD\u4F5C\u65B9\u6CD5\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044"), origin);
     const requestId2 = crypto.randomUUID();
-    const metrics = { poolWaitMs: 0, roomLockWaitMs: 0, dbWorkMs: 0, queryCount: 0 };
+    const metrics = { poolWaitMs: 0, roomLockWaitMs: 0, dbWorkMs: 0, queryCount: 0, controlQueryCount: 0, ...route?.name === "joinRoom" || route?.name === "ready" ? { commandPath: "legacy" } : {} };
     let authMs = 0;
     let quotaMs = 0;
     const finish = (response) => {
@@ -8797,7 +8819,10 @@ function createSupabaseGateway(options) {
         const handlers = createApiHandlers({ database: db, teacherIdentity: provider, serverConfig: { teacherAllowedEmails: [], masterTeacherEmail: options.masterEmail.trim().toLowerCase() }, now: options.now ?? Date.now, random: () => crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296, randomUUID: () => crypto.randomUUID() });
         if (route?.name === "joinRoom" && options.nativeJoin || route?.name === "ready" && options.nativeReady) {
           const native = await nativeRoomCommand(db, request.clone(), publicId, user.id, route.name === "joinRoom" ? "join" : "ready");
-          if (native) return native;
+          if (native) {
+            metrics.commandPath = "native";
+            return native;
+          }
         }
         const includeProgress = route?.name !== "state" && route?.name !== "ready" && !realtime;
         const before = publicId ? await roomFingerprint(db, publicId, includeProgress) : null;
