@@ -81,6 +81,8 @@ rollbackは該当`COMPETITION_NATIVE_JOIN`／`COMPETITION_NATIVE_READY`をfalse�
 
 fresh全体レビューでCritical/Importantなし。指摘の空白修正とpublic config整合テストを追加。レビュー単独では実PG性能や公開権限を実行していないため、それらは本レポートの追加実行証拠で補完した。
 
-既存branchを保持して作業。公開・pushはユーザー承認済みのため追加承認待ちにしない。origin/mainに後から追加されたCloudflareビルド設定4commitを保持して統合した。追加提出問題に合わせてgradingや全提出経路を未承認で再設計せず、今回の公開範囲と残課題を区別する。
+既存branchを保持して作業。公開・pushはユーザー承認済みのため追加承認待ちにしない。origin/mainに後から追加されたCloudflareビルド設定4commitを保持して統合した。追加提出問題に合わせて仕様が除外したgradingや全提出経路まで変更せず、今回の公開範囲と残課題を区別する。
 
-実機カメラでのQR読取、学校Wi-Fi、iOS/Safari、長時間本番負荷、Cloudflareの実デプロイは未確認。GitHubのCI/公開commitは後続のrelease evidenceへ記録する。
+公開code commitは `39b6ead922bb431021e5eecf2ee468d0ba5b3bec`。[GitHub Actions](https://github.com/KoiChem/IonicFormulaCompetition/actions/runs/37620553926) のbuild/deployともsuccess、CIでも545 tests成功。GitHub MCPでjob steps/logを確認。push起動run一覧はMCPがPR起動分に限定されるためCLIでrun IDを取得した。公開Playwright再読込で `index-BFCAjfiW.js`／`index-B0HBjL6V.css` を確認し、pageerror/requestfailed/HTTP400以上は0。[公開画面](performance/native-2026-10-07/published-home.png)。
+
+実機カメラでのQR読取、学校Wi-Fi、iOS/Safari、長時間本番負荷、Cloudflareの実デプロイは未確認。
