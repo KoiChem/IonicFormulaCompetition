@@ -4771,6 +4771,14 @@ function legacyCandidates(settings) {
   return compounds.filter((compound) => compound.enabled && availableAtDifficulty(compound, settings.difficulty) && complexItemAllowed(compound, settings.complexEnabled, ionById)).map((item) => ({ item, category: compoundCategory(item), variants: variants.filter((variant) => compoundSupports(item, variant)) })).filter((candidate) => candidate.category && weights[candidate.category] > 0 && candidate.variants.length);
 }
 function candidates(settings, profile) {
+  if (settings.complexOnly === true) {
+    const source2 = settings.mode === "ion" ? ions2.filter((i) => i.ionQuestionEnabled !== false) : compounds;
+    return source2.filter((item) => isComplexItem(item, ionById)).map((item) => ({
+      item,
+      category: "charge" in item ? ionCategory(item) : compoundCategory(item),
+      variants: "charge" in item ? ionVariants(settings) : compoundVariants(settings).filter((v) => compoundSupports(item, v))
+    })).filter((candidate) => candidate.category && candidate.variants.length);
+  }
   if (profile === null) return legacyCandidates(settings);
   const rule = profile.rules[settings.mode][settings.difficulty];
   const overrides = settings.mode === "ion" ? profile.ionDifficulties : profile.compoundDifficulties;
@@ -4795,7 +4803,7 @@ function allocations(pool, count, weights) {
 }
 function selectCandidates(settings, profile, random) {
   const eligible = candidates(settings, profile);
-  if (profile === null) return shuffled(eligible, random).slice(0, settings.questionCount);
+  if (settings.complexOnly === true || profile === null) return shuffled(eligible, random).slice(0, settings.questionCount);
   const quota = settings.complexEnabled ? Math.ceil(settings.questionCount * profile.rules[settings.mode][settings.difficulty].complexPercent / 100) : 0;
   const complex = eligible.filter((c) => isComplexItem(c.item, ionById));
   const ordinary = eligible.filter((c) => !isComplexItem(c.item, ionById));
@@ -4821,6 +4829,7 @@ function validateQuestionProfile(profile) {
   }
 }
 function validateGameSettings(settings, profile = DEFAULT_QUESTION_PROFILE) {
+  if (settings.complexOnly !== void 0 && typeof settings.complexOnly !== "boolean") throw new TypeError("\u932F\u30A4\u30AA\u30F3\u306E\u307F\u8A2D\u5B9A\u304C\u4E0D\u6B63\u3067\u3059");
   if (settings.complexEnabled !== void 0 && typeof settings.complexEnabled !== "boolean") throw new TypeError("\u932F\u30A4\u30AA\u30F3\u8A2D\u5B9A\u304C\u4E0D\u6B63\u3067\u3059");
   if (settings.chemistryContentVersion !== void 0 && settings.chemistryContentVersion !== CHEMISTRY_CONTENT_VERSION) throw new TypeError("\u6559\u6750\u306E\u7248\u304C\u4E0D\u6B63\u3067\u3059");
   if (settings.gradingMode !== void 0 && settings.gradingMode !== "immediate" && settings.gradingMode !== "deferred") throw new TypeError("\u5224\u5B9A\u65B9\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
@@ -7406,6 +7415,7 @@ function parseSettings(value) {
     "compoundAnswer",
     "gradingMode",
     "complexEnabled",
+    "complexOnly",
     "chemistryContentVersion"
   ]);
   if (!isRecord(value.compoundPrompts)) throw new ApiError(400, "invalid_settings", "\u51FA\u984C\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
